@@ -1,21 +1,5 @@
 const db = require("../config/database");
 
-// =====================================================
-// KONFIGURASI SISTEM
-// =====================================================
-
-/*
- * Sistem ADELINA KOST mulai digunakan pada:
- *
- * Agustus 2026
- *
- * Artinya:
- * Januari 2026 - Juli 2026
- * dianggap sebagai periode sebelum sistem berjalan.
- *
- * Jangan membuat tagihan untuk periode tersebut.
- */
-
 const SYSTEM_START_YEAR = 2026;
 const SYSTEM_START_MONTH = 8;
 
