@@ -1,153 +1,479 @@
 const db = require("../config/database");
 
+
 // =====================================================
 // GET LAPORAN KEUANGAN
-// GET /api/reports?month=8&year=2026
+// GET /api/reports
+//
+// MODE 1 — BULANAN
+// /api/reports?month=8&year=2026
+//
+// MODE 2 — CUSTOM TANGGAL
+// /api/reports?startDate=2026-08-01&endDate=2026-08-30
+//
+// BACKWARD COMPATIBILITY:
+// /api/reports?start_date=2026-08-01&end_date=2026-08-30
 // =====================================================
 
 const getFinancialReport = async (req, res) => {
+
     try {
 
-        const { month, year } = req.query;
+        const {
+            month,
+            year,
+
+            // Format baru
+            startDate,
+            endDate,
+
+            // Format lama
+            start_date,
+            end_date
+
+        } = req.query;
+
 
         // =================================================
-        // VALIDASI
+        // NORMALISASI CUSTOM DATE
+        //
+        // Prioritas:
+        // startDate / endDate
+        //
+        // Jika tidak ada:
+        // start_date / end_date
         // =================================================
 
-        if (!month || !year) {
-            return res.status(400).json({
-                success: false,
-                message: "month dan year wajib diisi"
-            });
-        }
+        const customStartDate =
+            startDate || start_date;
 
-        const monthNumber = Number(month);
-        const yearNumber = Number(year);
+        const customEndDate =
+            endDate || end_date;
+
+
+        // =================================================
+        // TENTUKAN MODE LAPORAN
+        // =================================================
+
+        const isMonthly =
+            month !== undefined &&
+            year !== undefined;
+
+
+        const isCustomDate =
+            customStartDate !== undefined &&
+            customEndDate !== undefined;
+
+
+        // =================================================
+        // TIDAK BOLEH CAMPUR MODE
+        // =================================================
 
         if (
-            !Number.isInteger(monthNumber) ||
-            monthNumber < 1 ||
-            monthNumber > 12
+            isMonthly &&
+            isCustomDate
         ) {
+
             return res.status(400).json({
+
                 success: false,
-                message: "month harus berupa angka 1 sampai 12"
+
+                message:
+                    "Gunakan laporan bulanan atau custom tanggal, jangan keduanya sekaligus."
+
             });
+
         }
 
-        if (
-            !Number.isInteger(yearNumber) ||
-            yearNumber < 2000
-        ) {
+
+        // =================================================
+        // MODE CUSTOM TANGGAL
+        // =================================================
+
+        if (isCustomDate) {
+
+            // -------------------------------------------------
+            // VALIDASI FORMAT TANGGAL
+            // -------------------------------------------------
+
+            const dateRegex =
+                /^\d{4}-\d{2}-\d{2}$/;
+
+
+            if (
+                !dateRegex.test(customStartDate) ||
+                !dateRegex.test(customEndDate)
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Format tanggal harus YYYY-MM-DD"
+
+                });
+
+            }
+
+
+            // -------------------------------------------------
+            // VALIDASI TANGGAL
+            // -------------------------------------------------
+
+            const startDateObject =
+                new Date(
+                    `${customStartDate}T00:00:00`
+                );
+
+
+            const endDateObject =
+                new Date(
+                    `${customEndDate}T00:00:00`
+                );
+
+
+            if (
+                Number.isNaN(
+                    startDateObject.getTime()
+                ) ||
+                Number.isNaN(
+                    endDateObject.getTime()
+                )
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Tanggal tidak valid"
+
+                });
+
+            }
+
+
+            // -------------------------------------------------
+            // END DATE TIDAK BOLEH SEBELUM START DATE
+            // -------------------------------------------------
+
+            if (
+                endDateObject < startDateObject
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Tanggal sampai tidak boleh sebelum tanggal mulai"
+
+                });
+
+            }
+
+        }
+
+
+        // =================================================
+        // MODE BULANAN
+        // =================================================
+
+        else if (isMonthly) {
+
+            const monthNumber =
+                Number(month);
+
+
+            const yearNumber =
+                Number(year);
+
+
+            // -------------------------------------------------
+            // VALIDASI MONTH
+            // -------------------------------------------------
+
+            if (
+                !Number.isInteger(
+                    monthNumber
+                ) ||
+                monthNumber < 1 ||
+                monthNumber > 12
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "month harus berupa angka 1 sampai 12"
+
+                });
+
+            }
+
+
+            // -------------------------------------------------
+            // VALIDASI YEAR
+            // -------------------------------------------------
+
+            if (
+                !Number.isInteger(
+                    yearNumber
+                ) ||
+                yearNumber < 2000
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "year tidak valid"
+
+                });
+
+            }
+
+        }
+
+
+        // =================================================
+        // TIDAK ADA FILTER
+        // =================================================
+
+        else {
+
             return res.status(400).json({
+
                 success: false,
-                message: "year tidak valid"
+
+                message:
+                    "Gunakan month & year atau startDate & endDate"
+
             });
+
+        }
+
+
+        // =================================================
+        // KONDISI SQL
+        // =================================================
+
+        let paymentDateCondition = "";
+
+        let expenseDateCondition = "";
+
+        let paymentParams = [];
+
+        let expenseParams = [];
+
+
+        // =================================================
+        // MODE BULANAN
+        // =================================================
+
+        if (isMonthly) {
+
+            const monthNumber =
+                Number(month);
+
+
+            const yearNumber =
+                Number(year);
+
+
+            paymentDateCondition = `
+                MONTH(p.payment_date) = ?
+                AND YEAR(p.payment_date) = ?
+            `;
+
+
+            paymentParams = [
+                monthNumber,
+                yearNumber
+            ];
+
+
+            expenseDateCondition = `
+                MONTH(expense_date) = ?
+                AND YEAR(expense_date) = ?
+            `;
+
+
+            expenseParams = [
+                monthNumber,
+                yearNumber
+            ];
+
+        }
+
+
+        // =================================================
+        // MODE CUSTOM TANGGAL
+        // =================================================
+
+        if (isCustomDate) {
+
+            paymentDateCondition = `
+                p.payment_date >= ?
+                AND p.payment_date < DATE_ADD(?, INTERVAL 1 DAY)
+            `;
+
+
+            paymentParams = [
+                customStartDate,
+                customEndDate
+            ];
+
+
+            expenseDateCondition = `
+                expense_date >= ?
+                AND expense_date < DATE_ADD(?, INTERVAL 1 DAY)
+            `;
+
+
+            expenseParams = [
+                customStartDate,
+                customEndDate
+            ];
+
         }
 
 
         // =================================================
         // PEMASUKAN
         // =================================================
-        // Hanya pembayaran yang masuk pada bulan/tahun
-        // yang dipilih.
-        //
-        // Pembayaran diambil dari tabel payments.
-        // =================================================
 
-        const [payments] = await db.query(`
-            SELECT
-                p.id,
-                p.payment_date,
-                p.amount,
-                p.payment_method,
-                p.notes,
+        const [payments] =
+            await db.query(
+                `
+                SELECT
 
-                b.billing_month,
-                b.billing_year,
+                    p.id,
 
-                t.name AS tenant_name,
+                    p.payment_date,
 
-                r.room_number
+                    p.amount,
 
-            FROM payments p
+                    p.payment_method,
 
-            INNER JOIN bills b
-                ON p.bill_id = b.id
+                    p.notes,
 
-            INNER JOIN contracts c
-                ON b.contract_id = c.id
+                    b.billing_month,
 
-            INNER JOIN tenants t
-                ON c.tenant_id = t.id
+                    b.billing_year,
 
-            INNER JOIN rooms r
-                ON c.room_id = r.id
+                    t.name AS tenant_name,
 
-            WHERE MONTH(p.payment_date) = ?
-            AND YEAR(p.payment_date) = ?
+                    r.room_number
 
-            ORDER BY
-                p.payment_date DESC,
-                p.id DESC
-        `, [
-            monthNumber,
-            yearNumber
-        ]);
+                FROM payments p
+
+                INNER JOIN bills b
+                    ON p.bill_id = b.id
+
+                INNER JOIN contracts c
+                    ON b.contract_id = c.id
+
+                INNER JOIN tenants t
+                    ON c.tenant_id = t.id
+
+                INNER JOIN rooms r
+                    ON c.room_id = r.id
+
+                WHERE
+                    ${paymentDateCondition}
+
+                ORDER BY
+                    p.payment_date DESC,
+                    p.id DESC
+                `,
+                paymentParams
+            );
 
 
         // =================================================
         // TOTAL PEMASUKAN
         // =================================================
 
-        const totalIncome = payments.reduce(
-            (total, payment) => {
-                return total + Number(payment.amount || 0);
-            },
-            0
-        );
+        const totalIncome =
+            payments.reduce(
+                (
+                    total,
+                    payment
+                ) => {
+
+                    return (
+                        total +
+                        Number(
+                            payment.amount || 0
+                        )
+                    );
+
+                },
+                0
+            );
 
 
         // =================================================
         // PENGELUARAN
         // =================================================
 
-        const [expenses] = await db.query(`
-            SELECT
-                id,
-                expense_date,
-                category,
-                description,
-                amount
+        const [expenses] =
+            await db.query(
+                `
+                SELECT
 
-            FROM expenses
+                    id,
 
-            WHERE MONTH(expense_date) = ?
-            AND YEAR(expense_date) = ?
+                    expense_date,
 
-            ORDER BY
-                expense_date DESC,
-                id DESC
-        `, [
-            monthNumber,
-            yearNumber
-        ]);
+                    category,
+
+                    description,
+
+                    amount
+
+                FROM expenses
+
+                WHERE
+                    ${expenseDateCondition}
+
+                ORDER BY
+                    expense_date DESC,
+                    id DESC
+                `,
+                expenseParams
+            );
 
 
         // =================================================
         // TOTAL PENGELUARAN
         // =================================================
 
-        const totalExpense = expenses.reduce(
-            (total, expense) => {
-                return total + Number(expense.amount || 0);
-            },
-            0
-        );
+        const totalExpense =
+            expenses.reduce(
+                (
+                    total,
+                    expense
+                ) => {
+
+                    return (
+                        total +
+                        Number(
+                            expense.amount || 0
+                        )
+                    );
+
+                },
+                0
+            );
 
 
         // =================================================
-        // LABA / SALDO BERSIH
+        // LABA BERSIH
         // =================================================
 
         const netIncome =
@@ -159,29 +485,73 @@ const getFinancialReport = async (req, res) => {
         // REKAP PENGELUARAN PER KATEGORI
         // =================================================
 
-        const [expenseCategories] = await db.query(`
-            SELECT
-                category,
+        const [expenseCategories] =
+            await db.query(
+                `
+                SELECT
 
-                COUNT(*) AS transaction_count,
+                    category,
 
-                COALESCE(
-                    SUM(amount),
-                    0
-                ) AS total_amount
+                    COUNT(*) AS transaction_count,
 
-            FROM expenses
+                    COALESCE(
+                        SUM(amount),
+                        0
+                    ) AS total_amount
 
-            WHERE MONTH(expense_date) = ?
-            AND YEAR(expense_date) = ?
+                FROM expenses
 
-            GROUP BY category
+                WHERE
+                    ${expenseDateCondition}
 
-            ORDER BY total_amount DESC
-        `, [
-            monthNumber,
-            yearNumber
-        ]);
+                GROUP BY
+                    category
+
+                ORDER BY
+                    total_amount DESC
+                `,
+                expenseParams
+            );
+
+
+        // =================================================
+        // PERIOD RESPONSE
+        // =================================================
+
+        let period;
+
+
+        if (isMonthly) {
+
+            period = {
+
+                type:
+                    "monthly",
+
+                month:
+                    Number(month),
+
+                year:
+                    Number(year)
+
+            };
+
+        } else {
+
+            period = {
+
+                type:
+                    "custom",
+
+                start_date:
+                    customStartDate,
+
+                end_date:
+                    customEndDate
+
+            };
+
+        }
 
 
         // =================================================
@@ -189,14 +559,17 @@ const getFinancialReport = async (req, res) => {
         // =================================================
 
         res.json({
+
             success: true,
 
             data: {
 
-                period: {
-                    month: monthNumber,
-                    year: yearNumber
-                },
+                period,
+
+
+                // =================================================
+                // SUMMARY
+                // =================================================
 
                 summary: {
 
@@ -217,65 +590,85 @@ const getFinancialReport = async (req, res) => {
 
                 },
 
-                income: payments.map(
-                    (payment) => ({
 
-                        id:
-                            payment.id,
+                // =================================================
+                // INCOME
+                // =================================================
 
-                        payment_date:
-                            payment.payment_date,
+                income:
 
-                        amount:
-                            Number(
-                                payment.amount
-                            ) || 0,
+                    payments.map(
+                        (payment) => ({
 
-                        payment_method:
-                            payment.payment_method,
+                            id:
+                                payment.id,
 
-                        notes:
-                            payment.notes,
+                            payment_date:
+                                payment.payment_date,
 
-                        billing_month:
-                            payment.billing_month,
+                            amount:
+                                Number(
+                                    payment.amount
+                                ) || 0,
 
-                        billing_year:
-                            payment.billing_year,
+                            payment_method:
+                                payment.payment_method,
 
-                        tenant_name:
-                            payment.tenant_name,
+                            notes:
+                                payment.notes,
 
-                        room_number:
-                            payment.room_number
+                            billing_month:
+                                payment.billing_month,
 
-                    })
-                ),
+                            billing_year:
+                                payment.billing_year,
 
-                expenses: expenses.map(
-                    (expense) => ({
+                            tenant_name:
+                                payment.tenant_name,
 
-                        id:
-                            expense.id,
+                            room_number:
+                                payment.room_number
 
-                        expense_date:
-                            expense.expense_date,
+                        })
+                    ),
 
-                        category:
-                            expense.category,
 
-                        description:
-                            expense.description,
+                // =================================================
+                // EXPENSES
+                // =================================================
 
-                        amount:
-                            Number(
-                                expense.amount
-                            ) || 0
+                expenses:
 
-                    })
-                ),
+                    expenses.map(
+                        (expense) => ({
+
+                            id:
+                                expense.id,
+
+                            expense_date:
+                                expense.expense_date,
+
+                            category:
+                                expense.category,
+
+                            description:
+                                expense.description,
+
+                            amount:
+                                Number(
+                                    expense.amount
+                                ) || 0
+
+                        })
+                    ),
+
+
+                // =================================================
+                // EXPENSE CATEGORIES
+                // =================================================
 
                 expense_categories:
+
                     expenseCategories.map(
                         (item) => ({
 
@@ -296,6 +689,7 @@ const getFinancialReport = async (req, res) => {
                     )
 
             }
+
         });
 
     } catch (error) {
@@ -305,13 +699,21 @@ const getFinancialReport = async (req, res) => {
             error
         );
 
+
         res.status(500).json({
+
             success: false,
-            message: "Gagal mengambil laporan keuangan",
-            error: error.message
+
+            message:
+                "Gagal mengambil laporan keuangan",
+
+            error:
+                error.message
+
         });
 
     }
+
 };
 
 
@@ -320,5 +722,7 @@ const getFinancialReport = async (req, res) => {
 // =====================================================
 
 module.exports = {
+
     getFinancialReport
+
 };

@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
+const path = require("path");
 require("dotenv").config();
 
 const db = require("./config/database");
@@ -33,6 +34,7 @@ const bankAccountRoutes = require("./routes/bankAccountRoutes");
 const reconciliationRoutes = require("./routes/reconciliationRoutes");
 const authRoutes = require("./routes/authRoutes");
 const reportRoutes = require("./routes/reportRoutes");
+const tenantDocumentRoutes = require("./routes/tenantDocumentRoutes");
 
 
 // ======================================================
@@ -56,11 +58,40 @@ const PORT = 5000;
 // MIDDLEWARE
 // ======================================================
 
-app.use(helmet());
+app.use(
+    helmet({
+        crossOriginResourcePolicy: {
+            policy: "cross-origin"
+        }
+    })
+);
 
 app.use(cors());
 
 app.use(express.json());
+
+
+// ======================================================
+// STATIC UPLOADS
+// ======================================================
+//
+// Membuat folder:
+// src/uploads
+//
+// bisa diakses melalui:
+// http://localhost:5000/uploads/
+//
+// Contoh file KTP:
+// http://localhost:5000/uploads/ktp/tenant-6-ktp-xxxxxxxx.jpg
+//
+// ======================================================
+
+app.use(
+    "/uploads",
+    express.static(
+        path.join(__dirname, "uploads")
+    )
+);
 
 
 // ======================================================
@@ -140,6 +171,11 @@ console.log(
 console.log(
     "reportRoutes:",
     typeof reportRoutes
+);
+
+console.log(
+    "tenantDocumentRoutes:",
+    typeof tenantDocumentRoutes
 );
 
 console.log("========================================");
@@ -254,14 +290,6 @@ app.use(
 // ======================================================
 // BANK ACCOUNTS
 // ======================================================
-//
-// GET     /api/bank-accounts
-// GET     /api/bank-accounts/:id
-// POST    /api/bank-accounts
-// PUT     /api/bank-accounts/:id
-// DELETE  /api/bank-accounts/:id
-//
-// ======================================================
 
 app.use(
     "/api/bank-accounts",
@@ -296,6 +324,16 @@ app.use(
 app.use(
     "/api/reports",
     reportRoutes
+);
+
+
+// ======================================================
+// TENANT DOCUMENTS
+// ======================================================
+
+app.use(
+    "/api/tenant-documents",
+    tenantDocumentRoutes
 );
 
 
@@ -401,8 +439,6 @@ app.get(
 // ======================================================
 // WHATSAPP REMINDER CRON JOB
 // ======================================================
-//
-// FUNGSI:
 //
 // Menjalankan pengecekan tagihan setiap hari
 // pada pukul 09:00 WIB.
