@@ -494,35 +494,35 @@ const getActiveContracts = async () => {
                 c.id,
                 c.tenant_id,
                 c.room_id,
-
+ 
                 DATE_FORMAT(
                     c.start_date,
                     '%Y-%m-%d'
                 ) AS start_date,
-
+ 
                 DATE_FORMAT(
                     c.end_date,
                     '%Y-%m-%d'
                 ) AS end_date,
-
+ 
                 c.monthly_price,
                 c.status AS contract_status,
-
+ 
                 t.name AS tenant_name,
                 t.phone AS tenant_phone,
-
+ 
                 r.room_number
-
+ 
             FROM contracts AS c
-
+ 
             INNER JOIN tenants AS t
                 ON c.tenant_id = t.id
-
+ 
             INNER JOIN rooms AS r
                 ON c.room_id = r.id
-
+ 
             WHERE c.status = 'active'
-
+ 
             ORDER BY c.id ASC
         `);
 
@@ -733,20 +733,20 @@ const ensureBillsForPeriod = async (
                     SELECT
                         b.id,
                         b.status,
-
+ 
                         DATE_FORMAT(
                             b.due_date,
                             '%Y-%m-%d'
                         ) AS due_date
-
+ 
                     FROM bills AS b
-
+ 
                     WHERE b.contract_id = ?
-
+ 
                     AND b.billing_month = ?
-
+ 
                     AND b.billing_year = ?
-
+ 
                     LIMIT 1
                 `, [
                     contract.id,
@@ -856,7 +856,7 @@ const ensureBillsForPeriod = async (
                         due_date,
                         status
                     )
-
+ 
                     VALUES (?, ?, ?, ?, ?, 'unpaid')
                 `, [
                     contract.id,
@@ -1056,62 +1056,62 @@ const getBills = async (
                 SELECT
                     b.id,
                     b.contract_id,
-
+ 
                     c.tenant_id,
                     c.room_id,
-
+ 
                     t.name AS tenant_name,
                     t.phone AS tenant_phone,
-
+ 
                     r.room_number,
-
+ 
                     b.billing_month,
                     b.billing_year,
                     b.amount,
-
+ 
                     DATE_FORMAT(
                         b.due_date,
                         '%Y-%m-%d'
                     ) AS due_date,
-
+ 
                     b.status AS bill_status,
-
+ 
                     b.created_at,
-
+ 
                     c.status AS contract_status,
-
+ 
                     DATE_FORMAT(
                         c.start_date,
                         '%Y-%m-%d'
                     ) AS contract_start_date,
-
+ 
                     DATE_FORMAT(
                         c.end_date,
                         '%Y-%m-%d'
                     ) AS contract_end_date
-
+ 
                 FROM bills AS b
-
+ 
                 INNER JOIN contracts AS c
                     ON b.contract_id = c.id
-
+ 
                 INNER JOIN tenants AS t
                     ON c.tenant_id = t.id
-
+ 
                 INNER JOIN rooms AS r
                     ON c.room_id = r.id
-
+ 
                 WHERE c.status = 'active'
-
+ 
                 AND b.status IN (
                     'unpaid',
                     'late'
                 )
-
+ 
                 AND b.billing_month = ?
-
+ 
                 AND b.billing_year = ?
-
+ 
                 ORDER BY
                     b.due_date ASC,
                     b.id ASC
@@ -1241,6 +1241,409 @@ const getBills = async (
 // GET /api/bills/:id
 // =====================================================
 
+// =====================================================
+// GET MY BILLS
+// GET /api/bills/my-bills
+//
+// PENGHUNI
+//
+// Tenant ID diambil dari JWT.
+// Penghuni hanya bisa melihat tagihan miliknya sendiri.
+// =====================================================
+
+const getMyBills = async (
+    req,
+    res
+) => {
+
+    try {
+
+        // =============================================
+        // CEK AUTHENTICATION
+        // =============================================
+
+        if (!req.user) {
+
+            return res.status(401).json({
+
+                success: false,
+
+                message:
+                    "User belum terautentikasi"
+
+            });
+
+        }
+
+
+        // =============================================
+        // AMBIL TENANT ID DARI JWT
+        // =============================================
+
+        const tenantId =
+            req.user.tenant_id;
+
+
+        // =============================================
+        // VALIDASI TENANT ID
+        // =============================================
+
+        if (
+            !tenantId ||
+            Number.isNaN(Number(tenantId))
+        ) {
+
+            return res.status(403).json({
+
+                success: false,
+
+                message:
+                    "Akun penghuni tidak memiliki tenant_id yang valid"
+
+            });
+
+        }
+
+
+        // =============================================
+        // AMBIL TANGGAL BERJALAN WIB
+        // =============================================
+
+        const currentDate =
+            getCurrentWIBDate();
+
+
+        // =============================================
+        // AUTO GENERATE TAGIHAN BULAN BERJALAN
+        // =============================================
+
+        await ensureBillsForPeriod(
+            currentDate.month,
+            currentDate.year
+        );
+
+
+        // =============================================
+        // UPDATE STATUS LATE
+        //
+        // HANYA UNTUK PERIODE SISTEM
+        //
+        // Sistem mulai:
+        // Agustus 2026
+        // =============================================
+
+        const today =
+            buildDate(
+                currentDate.year,
+                currentDate.month,
+                currentDate.day
+            );
+
+
+        await db.query(`
+            UPDATE bills AS b
+
+            INNER JOIN contracts AS c
+                ON b.contract_id = c.id
+
+            SET
+                b.status = 'late'
+
+            WHERE c.tenant_id = ?
+
+            AND b.status = 'unpaid'
+
+            AND b.due_date < ?
+
+            AND (
+                b.billing_year > ?
+                OR (
+                    b.billing_year = ?
+                    AND b.billing_month >= ?
+                )
+            )
+
+            AND (
+                b.billing_year < ?
+                OR (
+                    b.billing_year = ?
+                    AND b.billing_month <= ?
+                )
+            )
+        `, [
+
+            tenantId,
+
+            today,
+
+            // ==============================
+            // BATAS AWAL SISTEM
+            // Agustus 2026
+            // ==============================
+
+            SYSTEM_START_YEAR,
+
+            SYSTEM_START_YEAR,
+
+            SYSTEM_START_MONTH,
+
+            // ==============================
+            // BATAS AKHIR
+            // Bulan berjalan
+            // ==============================
+
+            currentDate.year,
+
+            currentDate.year,
+
+            currentDate.month
+
+        ]);
+
+
+        // =============================================
+        // AMBIL TAGIHAN TENANT
+        //
+        // HANYA:
+        //
+        // Agustus 2026
+        // sampai bulan berjalan
+        //
+        // Tagihan sebelum sistem dimulai
+        // TIDAK DITAMPILKAN.
+        // =============================================
+
+        const [rows] =
+            await db.query(`
+        SELECT
+
+            b.id,
+            b.contract_id,
+
+            c.tenant_id,
+            c.room_id,
+
+            t.name AS tenant_name,
+
+            r.room_number,
+
+            b.billing_month,
+            b.billing_year,
+            b.amount,
+
+            DATE_FORMAT(
+                b.due_date,
+                '%Y-%m-%d'
+            ) AS due_date,
+
+            b.status AS bill_status,
+
+            b.created_at,
+
+            c.status AS contract_status,
+
+            DATE_FORMAT(
+                c.start_date,
+                '%Y-%m-%d'
+            ) AS contract_start_date,
+
+            DATE_FORMAT(
+                c.end_date,
+                '%Y-%m-%d'
+            ) AS contract_end_date
+
+        FROM bills AS b
+
+        INNER JOIN contracts AS c
+            ON b.contract_id = c.id
+
+        INNER JOIN tenants AS t
+            ON c.tenant_id = t.id
+
+        INNER JOIN rooms AS r
+            ON c.room_id = r.id
+
+        WHERE c.tenant_id = ?
+
+        AND (
+            b.billing_year > ?
+            OR (
+                b.billing_year = ?
+                AND b.billing_month >= ?
+            )
+        )
+
+        AND (
+            b.billing_year < ?
+            OR (
+                b.billing_year = ?
+                AND b.billing_month <= ?
+            )
+        )
+
+        ORDER BY
+
+            b.billing_year DESC,
+
+            b.billing_month DESC,
+
+            b.id DESC
+
+    `, [
+
+                tenantId,
+
+                SYSTEM_START_YEAR,
+                SYSTEM_START_YEAR,
+                SYSTEM_START_MONTH,
+
+                currentDate.year,
+                currentDate.year,
+                currentDate.month
+
+            ]);
+
+
+        // =============================================
+        // SUMMARY
+        // =============================================
+
+        const unpaidBills =
+            rows.filter(
+                bill =>
+                    bill.bill_status === "unpaid"
+            );
+
+
+        const lateBills =
+            rows.filter(
+                bill =>
+                    bill.bill_status === "late"
+            );
+
+
+        const paidBills =
+            rows.filter(
+                bill =>
+                    bill.bill_status === "paid"
+            );
+
+
+        const unpaidAmount =
+            unpaidBills.reduce(
+                (total, bill) =>
+                    total +
+                    Number(
+                        bill.amount || 0
+                    ),
+                0
+            );
+
+
+        const lateAmount =
+            lateBills.reduce(
+                (total, bill) =>
+                    total +
+                    Number(
+                        bill.amount || 0
+                    ),
+                0
+            );
+
+
+        const paidAmount =
+            paidBills.reduce(
+                (total, bill) =>
+                    total +
+                    Number(
+                        bill.amount || 0
+                    ),
+                0
+            );
+
+
+        // =============================================
+        // TAGIHAN AKTIF TERBARU
+        // =============================================
+
+        const activeBills =
+            rows.filter(
+                bill =>
+                    bill.bill_status === "unpaid" ||
+                    bill.bill_status === "late"
+            );
+
+
+        const currentBill =
+            activeBills.length > 0
+                ? activeBills[0]
+                : null;
+
+
+        // =============================================
+        // RESPONSE
+        // =============================================
+
+        return res.status(200).json({
+
+            success: true,
+
+            data: rows,
+
+            summary: {
+
+                total:
+                    rows.length,
+
+                unpaid:
+                    unpaidBills.length,
+
+                late:
+                    lateBills.length,
+
+                paid:
+                    paidBills.length,
+
+                unpaid_amount:
+                    unpaidAmount,
+
+                late_amount:
+                    lateAmount,
+
+                paid_amount:
+                    paidAmount
+
+            },
+
+            current_bill:
+                currentBill
+
+        });
+
+
+    } catch (error) {
+
+        console.error(
+            "Get My Bills Error:",
+            error
+        );
+
+
+        return res.status(500).json({
+
+            success: false,
+
+            message:
+                "Gagal mengambil tagihan penghuni",
+
+            error:
+                error.message
+
+        });
+
+    }
+
+};
 const getBillById = async (
     req,
     res
@@ -1257,51 +1660,51 @@ const getBillById = async (
                 SELECT
                     b.id,
                     b.contract_id,
-
+ 
                     c.tenant_id,
                     c.room_id,
-
+ 
                     t.name AS tenant_name,
                     t.phone AS tenant_phone,
-
+ 
                     r.room_number,
-
+ 
                     b.billing_month,
                     b.billing_year,
                     b.amount,
-
+ 
                     DATE_FORMAT(
                         b.due_date,
                         '%Y-%m-%d'
                     ) AS due_date,
-
+ 
                     b.status AS bill_status,
-
+ 
                     b.created_at,
-
+ 
                     c.status AS contract_status,
-
+ 
                     DATE_FORMAT(
                         c.start_date,
                         '%Y-%m-%d'
                     ) AS contract_start_date,
-
+ 
                     DATE_FORMAT(
                         c.end_date,
                         '%Y-%m-%d'
                     ) AS contract_end_date
-
+ 
                 FROM bills AS b
-
+ 
                 INNER JOIN contracts AS c
                     ON b.contract_id = c.id
-
+ 
                 INNER JOIN tenants AS t
                     ON c.tenant_id = t.id
-
+ 
                 INNER JOIN rooms AS r
                     ON c.room_id = r.id
-
+ 
                 WHERE b.id = ?
             `, [id]);
 
@@ -1412,23 +1815,23 @@ const createBill = async (
                     c.id,
                     c.tenant_id,
                     c.room_id,
-
+ 
                     DATE_FORMAT(
                         c.start_date,
                         '%Y-%m-%d'
                     ) AS start_date,
-
+ 
                     DATE_FORMAT(
                         c.end_date,
                         '%Y-%m-%d'
                     ) AS end_date,
-
+ 
                     c.monthly_price,
-
+ 
                     c.status AS contract_status
-
+ 
                 FROM contracts AS c
-
+ 
                 WHERE c.id = ?
             `, [
                 contract_id
@@ -1593,15 +1996,15 @@ const createBill = async (
             await db.query(`
                 SELECT
                     b.id
-
+ 
                 FROM bills AS b
-
+ 
                 WHERE b.contract_id = ?
-
+ 
                 AND b.billing_month = ?
-
+ 
                 AND b.billing_year = ?
-
+ 
                 LIMIT 1
             `, [
                 contract_id,
@@ -1689,7 +2092,7 @@ const createBill = async (
                     due_date,
                     status
                 )
-
+ 
                 VALUES (?, ?, ?, ?, ?, ?)
             `, [
                 contract_id,
@@ -1710,41 +2113,41 @@ const createBill = async (
                 SELECT
                     b.id,
                     b.contract_id,
-
+ 
                     c.tenant_id,
                     c.room_id,
-
+ 
                     t.name AS tenant_name,
                     t.phone AS tenant_phone,
-
+ 
                     r.room_number,
-
+ 
                     b.billing_month,
                     b.billing_year,
                     b.amount,
-
+ 
                     DATE_FORMAT(
                         b.due_date,
                         '%Y-%m-%d'
                     ) AS due_date,
-
+ 
                     b.status AS bill_status,
-
+ 
                     b.created_at,
-
+ 
                     c.status AS contract_status
-
+ 
                 FROM bills AS b
-
+ 
                 INNER JOIN contracts AS c
                     ON b.contract_id = c.id
-
+ 
                 INNER JOIN tenants AS t
                     ON c.tenant_id = t.id
-
+ 
                 INNER JOIN rooms AS r
                     ON c.room_id = r.id
-
+ 
                 WHERE b.id = ?
             `, [
                 result.insertId
@@ -1970,7 +2373,7 @@ const updateBill = async (
                 SELECT
                     b.*
                 FROM bills AS b
-
+ 
                 WHERE b.id = ?
             `, [
                 id
@@ -2116,17 +2519,17 @@ const updateBill = async (
             await db.query(`
                 SELECT
                     b.id
-
+ 
                 FROM bills AS b
-
+ 
                 WHERE b.contract_id = ?
-
+ 
                 AND b.billing_month = ?
-
+ 
                 AND b.billing_year = ?
-
+ 
                 AND b.id != ?
-
+ 
                 LIMIT 1
             `, [
                 existingBill.contract_id,
@@ -2163,14 +2566,14 @@ const updateBill = async (
                         c.start_date,
                         '%Y-%m-%d'
                     ) AS start_date,
-
+ 
                     DATE_FORMAT(
                         c.end_date,
                         '%Y-%m-%d'
                     ) AS end_date
-
+ 
                 FROM contracts AS c
-
+ 
                 WHERE c.id = ?
             `, [
                 existingBill.contract_id
@@ -2270,14 +2673,14 @@ const updateBill = async (
 
         await db.query(`
             UPDATE bills AS b
-
+ 
             SET
                 b.billing_month = ?,
                 b.billing_year = ?,
                 b.amount = ?,
                 b.due_date = ?,
                 b.status = ?
-
+ 
             WHERE b.id = ?
         `, [
             newBillingMonth,
@@ -2298,41 +2701,41 @@ const updateBill = async (
                 SELECT
                     b.id,
                     b.contract_id,
-
+ 
                     c.tenant_id,
                     c.room_id,
-
+ 
                     t.name AS tenant_name,
                     t.phone AS tenant_phone,
-
+ 
                     r.room_number,
-
+ 
                     b.billing_month,
                     b.billing_year,
                     b.amount,
-
+ 
                     DATE_FORMAT(
                         b.due_date,
                         '%Y-%m-%d'
                     ) AS due_date,
-
+ 
                     b.status AS bill_status,
-
+ 
                     b.created_at,
-
+ 
                     c.status AS contract_status
-
+ 
                 FROM bills AS b
-
+ 
                 INNER JOIN contracts AS c
                     ON b.contract_id = c.id
-
+ 
                 INNER JOIN tenants AS t
                     ON c.tenant_id = t.id
-
+ 
                 INNER JOIN rooms AS r
                     ON c.room_id = r.id
-
+ 
                 WHERE b.id = ?
             `, [
                 id
@@ -2417,9 +2820,9 @@ const deleteBill = async (
             await db.query(`
                 SELECT
                     b.id
-
+ 
                 FROM bills AS b
-
+ 
                 WHERE b.id = ?
             `, [
                 id
@@ -2507,6 +2910,83 @@ const deleteBill = async (
 
 
 // =====================================================
+// AUTO GENERATE TAGIHAN BULANAN
+// =====================================================
+//
+// Setiap hari pukul 00:01 WIB, sistem memastikan tagihan
+// untuk bulan berjalan sudah tersedia untuk semua kontrak aktif.
+//
+// Aman terhadap duplikasi karena ensureBillsForPeriod()
+// selalu mengecek tagihan berdasarkan contract_id + periode.
+//
+// =====================================================
+
+try {
+
+    const cron = require("node-cron");
+
+    cron.schedule(
+        "1 0 * * *",
+        async () => {
+
+            try {
+
+                const currentDate =
+                    getCurrentWIBDate();
+
+                console.log(
+                    `[BILL SCHEDULER] Generate tagihan ${currentDate.month}/${currentDate.year}...`
+                );
+
+                const result =
+                    await ensureBillsForPeriod(
+                        currentDate.month,
+                        currentDate.year
+                    );
+
+                await updateLateBills(
+                    currentDate.month,
+                    currentDate.year
+                );
+
+                console.log(
+                    `[BILL SCHEDULER] Selesai. ` +
+                    `Created: ${result.createdBills.length}, ` +
+                    `Skipped: ${result.skippedBills.length}, ` +
+                    `Repaired: ${result.repairedBills.length}, ` +
+                    `Failed: ${result.failedBills.length}`
+                );
+
+            } catch (error) {
+
+                console.error(
+                    "[BILL SCHEDULER] Error:",
+                    error
+                );
+
+            }
+
+        },
+        {
+            timezone: "Asia/Jakarta"
+        }
+    );
+
+    console.log(
+        "[BILL SCHEDULER] Aktif - setiap hari 00:01 WIB"
+    );
+
+} catch (error) {
+
+    console.error(
+        "[BILL SCHEDULER] Gagal mengaktifkan scheduler:",
+        error
+    );
+
+}
+
+
+// =====================================================
 // EXPORT
 // =====================================================
 
@@ -2522,6 +3002,8 @@ module.exports = {
 
     updateBill,
 
-    deleteBill
+    deleteBill,
+
+    getMyBills
 
 };

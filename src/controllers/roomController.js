@@ -1,5 +1,6 @@
 const db = require("../config/database");
 
+
 // =====================================================
 // HELPER
 // =====================================================
@@ -8,79 +9,224 @@ const db = require("../config/database");
 // Ambil status kamar berdasarkan kondisi sebenarnya
 //
 // PRIORITAS:
-// 1. Ada kontrak aktif  -> occupied
-// 2. Tidak ada kontrak  -> mengikuti room.status
-//    - inactive         -> inactive
-//    - selain itu       -> available
 //
-// Jadi rooms.status yang nyangkut "occupied" tidak akan
-// membuat kamar tampil terisi kalau kontraknya sudah tidak aktif.
+// 1. Ada kontrak aktif       -> occupied
+// 2. room.status = booked    -> booked
+// 3. room.status = occupied  -> occupied
+// 4. room.status = inactive  -> inactive
+// 5. selain itu              -> available
+//
+// ALUR:
+//
+// available
+//     ↓
+// booked
+//     ↓
+// occupied
+//
+// CATATAN:
+//
+// Pembayaran booking TIDAK membuat kamar menjadi
+// occupied.
+//
+// Pembayaran booking hanya memastikan booking tetap
+// berjalan / disetujui.
+//
+// Kamar menjadi occupied ketika sudah mempunyai
+// kontrak aktif.
 // -----------------------------------------------------
+
 const calculateRoomStatus = (room) => {
+
     const roomStatus = String(
-        room.room_status || room.status || ""
+        room.room_status ||
+        room.status ||
+        ""
     ).toLowerCase();
 
+
     const hasActiveContract =
-        Number(room.active_contract_id || 0) > 0;
+        Number(
+            room.active_contract_id || 0
+        ) > 0;
 
-    // Kalau ada kontrak aktif, kamar pasti terisi
-    if (hasActiveContract) {
+
+    // =================================================
+    // 1. ADA KONTRAK AKTIF
+    //
+    // Kontrak aktif = kamar resmi terisi.
+    // =================================================
+
+    if (
+        hasActiveContract
+    ) {
+
         return "occupied";
+
     }
 
-    // Kalau tidak ada kontrak aktif dan kamar nonaktif
-    if (roomStatus === "inactive") {
+
+    // =================================================
+    // 2. BOOKED
+    //
+    // Kamar sedang dalam proses / status booking.
+    //
+    // Pembayaran booking yang sudah diverifikasi
+    // TIDAK mengubah booked menjadi occupied.
+    // =================================================
+
+    if (
+        roomStatus === "booked"
+    ) {
+
+        return "booked";
+
+    }
+
+
+    // =================================================
+    // 3. OCCUPIED
+    //
+    // Hormati status occupied dari database.
+    //
+    // Catatan:
+    // Secara normal occupied harus mempunyai
+    // kontrak aktif.
+    // =================================================
+
+    if (
+        roomStatus === "occupied"
+    ) {
+
+        return "occupied";
+
+    }
+
+
+    // =================================================
+    // 4. NONAKTIF
+    // =================================================
+
+    if (
+        roomStatus === "inactive"
+    ) {
+
         return "inactive";
+
     }
 
-    // Selain itu kamar tersedia
+
+    // =================================================
+    // 5. DEFAULT
+    // =================================================
+
     return "available";
+
 };
 
 
 // -----------------------------------------------------
 // Format satu room hasil database
 // -----------------------------------------------------
+
 const formatRoom = (room) => {
 
     const calculatedStatus =
         calculateRoomStatus(room);
 
+
+    let statusSource = "room";
+
+
+    // =================================================
+    // STATUS DARI KONTRAK AKTIF
+    // =================================================
+
+    if (
+        calculatedStatus === "occupied" &&
+        Number(
+            room.active_contract_id || 0
+        ) > 0
+    ) {
+
+        statusSource =
+            "active_contract";
+
+    }
+
+
+    // =================================================
+    // STATUS DARI BOOKING
+    // =================================================
+
+    if (
+        calculatedStatus === "booked"
+    ) {
+
+        statusSource =
+            "booking";
+
+    }
+
+
+    // =================================================
+    // RESPONSE ROOM
+    // =================================================
+
     return {
+
         ...room,
 
+        // -------------------------------------------------
         // Status yang dipakai frontend
-        status: calculatedStatus,
+        // -------------------------------------------------
 
-        // Simpan status asli database untuk debugging
-        room_status: room.room_status || null,
+        status:
+            calculatedStatus,
 
-        // Informasi sumber status
+
+        // -------------------------------------------------
+        // Status asli database
+        // -------------------------------------------------
+
+        room_status:
+            room.room_status ||
+            null,
+
+
+        // -------------------------------------------------
+        // Sumber status
+        // -------------------------------------------------
+
         status_source:
-            calculatedStatus === "occupied"
-                ? "active_contract"
-                : "room"
+            statusSource
+
     };
+
 };
 
 
 // -----------------------------------------------------
 // Query dasar room
 // -----------------------------------------------------
+
 const ROOM_SELECT = `
     SELECT
+
         r.*,
 
         r.status AS room_status,
 
         f.name AS floor_name,
+
         b.name AS building_name,
 
         c.id AS active_contract_id,
+
         c.tenant_id AS tenant_id,
 
         t.name AS tenant_name,
+
         t.phone AS tenant_phone
 
     FROM rooms r
@@ -101,28 +247,163 @@ const ROOM_SELECT = `
 
 
 // =====================================================
-// GET ALL ROOMS
-// GET /api/rooms
+// GET PUBLIC ROOMS
+// GET /api/rooms/public
 // =====================================================
-const getRooms = async (req, res) => {
+//
+// Endpoint khusus website User.
+//
+// Status:
+//
+// available
+// booked
+// occupied
+// inactive
+//
+// Data tenant TIDAK dikirim ke publik.
+// =====================================================
+
+const getPublicRooms = async (
+    req,
+    res
+) => {
 
     try {
 
-        const [rooms] = await db.query(`
-            ${ROOM_SELECT}
-            ORDER BY r.id ASC
-        `);
+        const [rooms] =
+            await db.query(`
 
-        // -------------------------------------------------
-        // Hitung status sebenarnya berdasarkan kontrak
-        // -------------------------------------------------
+                SELECT
+
+                    r.id,
+
+                    r.room_number,
+
+                    r.building_id,
+
+                    r.floor_id,
+
+                    r.price,
+
+                    r.notes,
+
+                    f.name AS floor_name,
+
+                    b.name AS building_name,
+
+                    CASE
+
+                        WHEN c.id IS NOT NULL
+                            THEN 'occupied'
+
+                        WHEN LOWER(r.status) = 'booked'
+                            THEN 'booked'
+
+                        WHEN LOWER(r.status) = 'inactive'
+                            THEN 'inactive'
+
+                        ELSE 'available'
+
+                    END AS status
+
+                FROM rooms r
+
+                LEFT JOIN floors f
+                    ON r.floor_id = f.id
+
+                LEFT JOIN buildings b
+                    ON r.building_id = b.id
+
+                LEFT JOIN contracts c
+                    ON c.room_id = r.id
+                    AND c.status = 'active'
+
+                WHERE LOWER(r.status) != 'inactive'
+
+                ORDER BY
+
+                    b.id ASC,
+
+                    f.id ASC,
+
+                    r.id ASC
+
+            `);
+
+
+        return res.json({
+
+            success: true,
+
+            data:
+                rooms
+
+        });
+
+    } catch (error) {
+
+        console.error(
+            "Get Public Rooms Error:",
+            error
+        );
+
+
+        return res.status(500).json({
+
+            success: false,
+
+            message:
+                "Gagal mengambil data kamar publik",
+
+            error:
+                error.message
+
+        });
+
+    }
+
+};
+
+
+// =====================================================
+// GET ALL ROOMS
+// GET /api/rooms
+// =====================================================
+
+const getRooms = async (
+    req,
+    res
+) => {
+
+    try {
+
+        const [rooms] =
+            await db.query(`
+
+                ${ROOM_SELECT}
+
+                ORDER BY r.id ASC
+
+            `);
+
+
+        // =================================================
+        // HITUNG STATUS SEBENARNYA
+        // =================================================
 
         const formattedRooms =
-            rooms.map(formatRoom);
+            rooms.map(
+                formatRoom
+            );
 
-        res.json({
+
+        return res.json({
+
             success: true,
-            data: formattedRooms
+
+            data:
+                formattedRooms
+
         });
 
     } catch (error) {
@@ -132,12 +413,21 @@ const getRooms = async (req, res) => {
             error
         );
 
-        res.status(500).json({
+
+        return res.status(500).json({
+
             success: false,
-            message: "Gagal mengambil data kamar",
-            error: error.message
+
+            message:
+                "Gagal mengambil data kamar",
+
+            error:
+                error.message
+
         });
+
     }
+
 };
 
 
@@ -145,36 +435,68 @@ const getRooms = async (req, res) => {
 // GET ROOM BY ID
 // GET /api/rooms/:id
 // =====================================================
-const getRoomById = async (req, res) => {
+
+const getRoomById = async (
+    req,
+    res
+) => {
 
     try {
 
-        const { id } = req.params;
+        const {
+            id
+        } = req.params;
 
-        const [rooms] = await db.query(`
-            ${ROOM_SELECT}
-            WHERE r.id = ?
-            LIMIT 1
-        `, [id]);
 
-        // -------------------------------------------------
-        // CEK ROOM
-        // -------------------------------------------------
+        const [rooms] =
+            await db.query(`
 
-        if (rooms.length === 0) {
+                ${ROOM_SELECT}
+
+                WHERE r.id = ?
+
+                LIMIT 1
+
+            `, [
+
+                id
+
+            ]);
+
+
+        // =================================================
+        // ROOM TIDAK DITEMUKAN
+        // =================================================
+
+        if (
+            rooms.length === 0
+        ) {
 
             return res.status(404).json({
+
                 success: false,
-                message: "Kamar tidak ditemukan"
+
+                message:
+                    "Kamar tidak ditemukan"
+
             });
+
         }
 
-        const room =
-            formatRoom(rooms[0]);
 
-        res.json({
+        const room =
+            formatRoom(
+                rooms[0]
+            );
+
+
+        return res.json({
+
             success: true,
-            data: room
+
+            data:
+                room
+
         });
 
     } catch (error) {
@@ -184,12 +506,21 @@ const getRoomById = async (req, res) => {
             error
         );
 
-        res.status(500).json({
+
+        return res.status(500).json({
+
             success: false,
-            message: "Gagal mengambil data kamar",
-            error: error.message
+
+            message:
+                "Gagal mengambil data kamar",
+
+            error:
+                error.message
+
         });
+
     }
+
 };
 
 
@@ -197,17 +528,28 @@ const getRoomById = async (req, res) => {
 // CREATE ROOM
 // POST /api/rooms
 // =====================================================
-const createRoom = async (req, res) => {
+
+const createRoom = async (
+    req,
+    res
+) => {
 
     try {
 
         const {
+
             room_number,
+
             building_id,
+
             floor_id,
+
             price,
+
             status,
+
             notes
+
         } = req.body;
 
 
@@ -217,13 +559,20 @@ const createRoom = async (req, res) => {
 
         if (
             !room_number ||
-            !String(room_number).trim()
+            !String(
+                room_number
+            ).trim()
         ) {
 
             return res.status(400).json({
+
                 success: false,
-                message: "Nomor kamar wajib diisi"
+
+                message:
+                    "Nomor kamar wajib diisi"
+
             });
+
         }
 
 
@@ -231,12 +580,19 @@ const createRoom = async (req, res) => {
         // VALIDASI BUILDING
         // =================================================
 
-        if (!building_id) {
+        if (
+            !building_id
+        ) {
 
             return res.status(400).json({
+
                 success: false,
-                message: "Building ID wajib diisi"
+
+                message:
+                    "Building ID wajib diisi"
+
             });
+
         }
 
 
@@ -245,15 +601,24 @@ const createRoom = async (req, res) => {
         // =================================================
 
         if (
+
             price === undefined ||
+
             price === null ||
+
             Number(price) <= 0
+
         ) {
 
             return res.status(400).json({
+
                 success: false,
-                message: "Harga kamar wajib diisi"
+
+                message:
+                    "Harga kamar wajib diisi"
+
             });
+
         }
 
 
@@ -262,14 +627,22 @@ const createRoom = async (req, res) => {
         // =================================================
 
         const roomStatus =
-            String(status || "available")
-                .toLowerCase();
+            String(
+                status ||
+                "available"
+            ).toLowerCase();
 
 
         const allowedStatus = [
+
             "available",
+
+            "booked",
+
             "occupied",
+
             "inactive"
+
         ];
 
 
@@ -280,14 +653,42 @@ const createRoom = async (req, res) => {
         ) {
 
             return res.status(400).json({
+
                 success: false,
-                message: "Status kamar tidak valid"
+
+                message:
+                    "Status kamar tidak valid"
+
             });
+
         }
 
 
         // =================================================
-        // ROOM BARU TIDAK BOLEH LANGSUNG OCCUPIED
+        // ROOM BARU TIDAK BOLEH BOOKED
+        // =================================================
+        //
+        // Booking harus melalui proses booking.
+        // =================================================
+
+        if (
+            roomStatus === "booked"
+        ) {
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    "Kamar tidak dapat langsung dibuat dengan status booking. Gunakan proses booking."
+
+            });
+
+        }
+
+
+        // =================================================
+        // ROOM BARU TIDAK BOLEH OCCUPIED
         // =================================================
 
         if (
@@ -295,10 +696,14 @@ const createRoom = async (req, res) => {
         ) {
 
             return res.status(400).json({
+
                 success: false,
+
                 message:
                     "Kamar tidak dapat langsung dibuat dengan status terisi. Buat kontrak aktif untuk mengisi kamar."
+
             });
+
         }
 
 
@@ -308,13 +713,21 @@ const createRoom = async (req, res) => {
 
         const [building] =
             await db.query(`
+
                 SELECT
+
                     id
+
                 FROM buildings
+
                 WHERE id = ?
+
                 LIMIT 1
+
             `, [
+
                 building_id
+
             ]);
 
 
@@ -323,10 +736,14 @@ const createRoom = async (req, res) => {
         ) {
 
             return res.status(404).json({
+
                 success: false,
+
                 message:
                     "Bangunan tidak ditemukan"
+
             });
+
         }
 
 
@@ -334,19 +751,31 @@ const createRoom = async (req, res) => {
         // CEK FLOOR
         // =================================================
 
-        if (floor_id) {
+        if (
+            floor_id
+        ) {
 
             const [floor] =
                 await db.query(`
+
                     SELECT
+
                         id
+
                     FROM floors
+
                     WHERE id = ?
+
                     AND building_id = ?
+
                     LIMIT 1
+
                 `, [
+
                     floor_id,
+
                     building_id
+
                 ]);
 
 
@@ -355,11 +784,16 @@ const createRoom = async (req, res) => {
             ) {
 
                 return res.status(400).json({
+
                     success: false,
+
                     message:
                         "Lantai tidak sesuai dengan bangunan"
+
                 });
+
             }
+
         }
 
 
@@ -369,15 +803,27 @@ const createRoom = async (req, res) => {
 
         const [duplicate] =
             await db.query(`
+
                 SELECT
+
                     id
+
                 FROM rooms
+
                 WHERE building_id = ?
+
                 AND room_number = ?
+
                 LIMIT 1
+
             `, [
+
                 building_id,
-                String(room_number).trim()
+
+                String(
+                    room_number
+                ).trim()
+
             ]);
 
 
@@ -386,10 +832,14 @@ const createRoom = async (req, res) => {
         ) {
 
             return res.status(409).json({
+
                 success: false,
+
                 message:
                     "Nomor kamar sudah digunakan pada bangunan ini"
+
             });
+
         }
 
 
@@ -399,6 +849,7 @@ const createRoom = async (req, res) => {
 
         const [result] =
             await db.query(`
+
                 INSERT INTO rooms
                 (
                     room_number,
@@ -408,16 +859,32 @@ const createRoom = async (req, res) => {
                     status,
                     notes
                 )
+
                 VALUES (?, ?, ?, ?, ?, ?)
+
             `, [
-                String(room_number).trim(),
+
+                String(
+                    room_number
+                ).trim(),
+
                 building_id,
-                floor_id || null,
-                Number(price),
+
+                floor_id ||
+                null,
+
+                Number(
+                    price
+                ),
+
                 roomStatus,
+
                 notes
-                    ? String(notes).trim()
+                    ? String(
+                        notes
+                    ).trim()
                     : null
+
             ]);
 
 
@@ -427,27 +894,40 @@ const createRoom = async (req, res) => {
 
         const [rooms] =
             await db.query(`
+
                 ${ROOM_SELECT}
+
                 WHERE r.id = ?
+
                 LIMIT 1
+
             `, [
+
                 result.insertId
+
             ]);
 
 
         const room =
-            formatRoom(rooms[0]);
+            formatRoom(
+                rooms[0]
+            );
 
 
         // =================================================
         // RESPONSE
         // =================================================
 
-        res.status(201).json({
+        return res.status(201).json({
+
             success: true,
+
             message:
                 "Kamar berhasil ditambahkan",
-            data: room
+
+            data:
+                room
+
         });
 
     } catch (error) {
@@ -457,13 +937,21 @@ const createRoom = async (req, res) => {
             error
         );
 
-        res.status(500).json({
+
+        return res.status(500).json({
+
             success: false,
+
             message:
                 "Gagal menambahkan kamar",
-            error: error.message
+
+            error:
+                error.message
+
         });
+
     }
+
 };
 
 
@@ -471,19 +959,33 @@ const createRoom = async (req, res) => {
 // UPDATE ROOM
 // PUT /api/rooms/:id
 // =====================================================
-const updateRoom = async (req, res) => {
+
+const updateRoom = async (
+    req,
+    res
+) => {
 
     try {
 
-        const { id } = req.params;
+        const {
+            id
+        } = req.params;
+
 
         const {
+
             room_number,
+
             building_id,
+
             floor_id,
+
             price,
+
             status,
+
             notes
+
         } = req.body;
 
 
@@ -493,19 +995,33 @@ const updateRoom = async (req, res) => {
 
         const [existing] =
             await db.query(`
+
                 SELECT
+
                     id,
+
                     room_number,
+
                     building_id,
+
                     floor_id,
+
                     price,
+
                     status,
+
                     notes
+
                 FROM rooms
+
                 WHERE id = ?
+
                 LIMIT 1
+
             `, [
+
                 id
+
             ]);
 
 
@@ -514,11 +1030,26 @@ const updateRoom = async (req, res) => {
         ) {
 
             return res.status(404).json({
+
                 success: false,
+
                 message:
                     "Kamar tidak ditemukan"
+
             });
+
         }
+
+
+        const existingRoom =
+            existing[0];
+
+
+        const existingStatus =
+            String(
+                existingRoom.status ||
+                ""
+            ).toLowerCase();
 
 
         // =================================================
@@ -527,14 +1058,20 @@ const updateRoom = async (req, res) => {
 
         if (
             !room_number ||
-            !String(room_number).trim()
+            !String(
+                room_number
+            ).trim()
         ) {
 
             return res.status(400).json({
+
                 success: false,
+
                 message:
                     "Nomor kamar wajib diisi"
+
             });
+
         }
 
 
@@ -542,13 +1079,19 @@ const updateRoom = async (req, res) => {
         // VALIDASI BUILDING
         // =================================================
 
-        if (!building_id) {
+        if (
+            !building_id
+        ) {
 
             return res.status(400).json({
+
                 success: false,
+
                 message:
                     "Building ID wajib diisi"
+
             });
+
         }
 
 
@@ -557,16 +1100,24 @@ const updateRoom = async (req, res) => {
         // =================================================
 
         if (
+
             price === undefined ||
+
             price === null ||
+
             Number(price) <= 0
+
         ) {
 
             return res.status(400).json({
+
                 success: false,
+
                 message:
                     "Harga kamar wajib diisi"
+
             });
+
         }
 
 
@@ -575,14 +1126,22 @@ const updateRoom = async (req, res) => {
         // =================================================
 
         const roomStatus =
-            String(status || "")
-                .toLowerCase();
+            String(
+                status ||
+                ""
+            ).toLowerCase();
 
 
         const allowedStatus = [
+
             "available",
+
+            "booked",
+
             "occupied",
+
             "inactive"
+
         ];
 
 
@@ -593,10 +1152,14 @@ const updateRoom = async (req, res) => {
         ) {
 
             return res.status(400).json({
+
                 success: false,
+
                 message:
                     "Status kamar tidak valid"
+
             });
+
         }
 
 
@@ -606,13 +1169,21 @@ const updateRoom = async (req, res) => {
 
         const [building] =
             await db.query(`
+
                 SELECT
+
                     id
+
                 FROM buildings
+
                 WHERE id = ?
+
                 LIMIT 1
+
             `, [
+
                 building_id
+
             ]);
 
 
@@ -621,10 +1192,14 @@ const updateRoom = async (req, res) => {
         ) {
 
             return res.status(404).json({
+
                 success: false,
+
                 message:
                     "Bangunan tidak ditemukan"
+
             });
+
         }
 
 
@@ -632,19 +1207,31 @@ const updateRoom = async (req, res) => {
         // CEK FLOOR
         // =================================================
 
-        if (floor_id) {
+        if (
+            floor_id
+        ) {
 
             const [floor] =
                 await db.query(`
+
                     SELECT
+
                         id
+
                     FROM floors
+
                     WHERE id = ?
+
                     AND building_id = ?
+
                     LIMIT 1
+
                 `, [
+
                     floor_id,
+
                     building_id
+
                 ]);
 
 
@@ -653,11 +1240,16 @@ const updateRoom = async (req, res) => {
             ) {
 
                 return res.status(400).json({
+
                     success: false,
+
                     message:
                         "Lantai tidak sesuai dengan bangunan"
+
                 });
+
             }
+
         }
 
 
@@ -667,17 +1259,31 @@ const updateRoom = async (req, res) => {
 
         const [duplicate] =
             await db.query(`
+
                 SELECT
+
                     id
+
                 FROM rooms
+
                 WHERE building_id = ?
+
                 AND room_number = ?
+
                 AND id != ?
+
                 LIMIT 1
+
             `, [
+
                 building_id,
-                String(room_number).trim(),
+
+                String(
+                    room_number
+                ).trim(),
+
                 id
+
             ]);
 
 
@@ -686,10 +1292,14 @@ const updateRoom = async (req, res) => {
         ) {
 
             return res.status(409).json({
+
                 success: false,
+
                 message:
                     "Nomor kamar sudah digunakan pada bangunan ini"
+
             });
+
         }
 
 
@@ -699,16 +1309,27 @@ const updateRoom = async (req, res) => {
 
         const [activeContracts] =
             await db.query(`
+
                 SELECT
+
                     id,
+
                     tenant_id,
+
                     status
+
                 FROM contracts
+
                 WHERE room_id = ?
+
                 AND status = 'active'
+
                 LIMIT 1
+
             `, [
+
                 id
+
             ]);
 
 
@@ -720,13 +1341,12 @@ const updateRoom = async (req, res) => {
         // ADA KONTRAK AKTIF
         // =================================================
 
-        if (hasActiveContract) {
+        if (
+            hasActiveContract
+        ) {
 
             // -------------------------------------------------
-            // Tidak boleh mengubah kamar aktif menjadi
-            // available / inactive secara manual.
-            //
-            // Kontrak harus diselesaikan terlebih dahulu.
+            // Kamar dengan kontrak aktif wajib occupied.
             // -------------------------------------------------
 
             if (
@@ -734,11 +1354,16 @@ const updateRoom = async (req, res) => {
             ) {
 
                 return res.status(409).json({
+
                     success: false,
+
                     message:
                         "Kamar masih memiliki kontrak aktif. Selesaikan kontrak penghuni terlebih dahulu sebelum mengubah status kamar."
+
                 });
+
             }
+
         }
 
 
@@ -746,11 +1371,12 @@ const updateRoom = async (req, res) => {
         // TIDAK ADA KONTRAK AKTIF
         // =================================================
 
-        if (!hasActiveContract) {
+        if (
+            !hasActiveContract
+        ) {
 
             // -------------------------------------------------
-            // Kamar tanpa kontrak aktif tidak boleh manual
-            // menjadi occupied.
+            // Tidak boleh manual menjadi occupied.
             // -------------------------------------------------
 
             if (
@@ -758,11 +1384,48 @@ const updateRoom = async (req, res) => {
             ) {
 
                 return res.status(400).json({
+
                     success: false,
+
                     message:
                         "Status terisi harus berasal dari kontrak aktif. Buat kontrak penghuni terlebih dahulu."
+
                 });
+
             }
+
+        }
+
+
+        // =================================================
+        // BOOKED
+        // =================================================
+        //
+        // Jangan izinkan user mengubah status booking
+        // secara manual dari halaman kamar.
+        //
+        // Status booked berasal dari proses booking.
+        // =================================================
+
+        if (
+            existingStatus === "booked"
+        ) {
+
+            if (
+                roomStatus !== "booked"
+            ) {
+
+                return res.status(409).json({
+
+                    success: false,
+
+                    message:
+                        "Kamar sedang dalam status booking. Status booking harus diselesaikan melalui proses booking."
+
+                });
+
+            }
+
         }
 
 
@@ -771,25 +1434,50 @@ const updateRoom = async (req, res) => {
         // =================================================
 
         await db.query(`
+
             UPDATE rooms
+
             SET
+
                 room_number = ?,
+
                 building_id = ?,
+
                 floor_id = ?,
+
                 price = ?,
+
                 status = ?,
+
                 notes = ?
+
             WHERE id = ?
+
         `, [
-            String(room_number).trim(),
+
+            String(
+                room_number
+            ).trim(),
+
             building_id,
-            floor_id || null,
-            Number(price),
+
+            floor_id ||
+            null,
+
+            Number(
+                price
+            ),
+
             roomStatus,
+
             notes
-                ? String(notes).trim()
+                ? String(
+                    notes
+                ).trim()
                 : null,
+
             id
+
         ]);
 
 
@@ -799,27 +1487,40 @@ const updateRoom = async (req, res) => {
 
         const [rooms] =
             await db.query(`
+
                 ${ROOM_SELECT}
+
                 WHERE r.id = ?
+
                 LIMIT 1
+
             `, [
+
                 id
+
             ]);
 
 
         const room =
-            formatRoom(rooms[0]);
+            formatRoom(
+                rooms[0]
+            );
 
 
         // =================================================
         // RESPONSE
         // =================================================
 
-        res.json({
+        return res.json({
+
             success: true,
+
             message:
                 "Kamar berhasil diperbarui",
-            data: room
+
+            data:
+                room
+
         });
 
     } catch (error) {
@@ -829,13 +1530,21 @@ const updateRoom = async (req, res) => {
             error
         );
 
-        res.status(500).json({
+
+        return res.status(500).json({
+
             success: false,
+
             message:
                 "Gagal memperbarui kamar",
-            error: error.message
+
+            error:
+                error.message
+
         });
+
     }
+
 };
 
 
@@ -843,14 +1552,21 @@ const updateRoom = async (req, res) => {
 // DELETE ROOM
 // DELETE /api/rooms/:id
 // =====================================================
-const deleteRoom = async (req, res) => {
+
+const deleteRoom = async (
+    req,
+    res
+) => {
 
     const connection =
         await db.getConnection();
 
+
     try {
 
-        const { id } = req.params;
+        const {
+            id
+        } = req.params;
 
 
         // =================================================
@@ -859,15 +1575,25 @@ const deleteRoom = async (req, res) => {
 
         const [existing] =
             await connection.query(`
+
                 SELECT
+
                     id,
+
                     room_number,
+
                     status
+
                 FROM rooms
+
                 WHERE id = ?
+
                 LIMIT 1
+
             `, [
+
                 id
+
             ]);
 
 
@@ -876,10 +1602,14 @@ const deleteRoom = async (req, res) => {
         ) {
 
             return res.status(404).json({
+
                 success: false,
+
                 message:
                     "Kamar tidak ditemukan"
+
             });
+
         }
 
 
@@ -889,15 +1619,25 @@ const deleteRoom = async (req, res) => {
 
         const [activeContract] =
             await connection.query(`
+
                 SELECT
+
                     id,
+
                     tenant_id
+
                 FROM contracts
+
                 WHERE room_id = ?
+
                 AND status = 'active'
+
                 LIMIT 1
+
             `, [
+
                 id
+
             ]);
 
 
@@ -906,10 +1646,66 @@ const deleteRoom = async (req, res) => {
         ) {
 
             return res.status(409).json({
+
                 success: false,
+
                 message:
                     "Kamar tidak dapat dihapus karena masih memiliki kontrak aktif. Selesaikan kontrak penghuni terlebih dahulu."
+
             });
+
+        }
+
+
+        // =================================================
+        // CEK BOOKING AKTIF
+        // =================================================
+        //
+        // Jangan hapus kamar yang masih mempunyai booking.
+        // =================================================
+
+        const [activeBooking] =
+            await connection.query(`
+
+                SELECT
+
+                    id,
+
+                    tenant_id,
+
+                    status
+
+                FROM room_bookings
+
+                WHERE room_id = ?
+
+                AND status IN (
+                    'pending',
+                    'approved'
+                )
+
+                LIMIT 1
+
+            `, [
+
+                id
+
+            ]);
+
+
+        if (
+            activeBooking.length > 0
+        ) {
+
+            return res.status(409).json({
+
+                success: false,
+
+                message:
+                    "Kamar tidak dapat dihapus karena masih memiliki booking aktif."
+
+            });
+
         }
 
 
@@ -919,14 +1715,23 @@ const deleteRoom = async (req, res) => {
 
         const [contracts] =
             await connection.query(`
+
                 SELECT
+
                     id,
+
                     status
+
                 FROM contracts
+
                 WHERE room_id = ?
+
                 LIMIT 1
+
             `, [
+
                 id
+
             ]);
 
 
@@ -940,10 +1745,14 @@ const deleteRoom = async (req, res) => {
         ) {
 
             return res.status(409).json({
+
                 success: false,
+
                 message:
                     "Kamar tidak dapat dihapus karena sudah memiliki riwayat kontrak. Gunakan status nonaktif agar histori tetap tersimpan."
+
             });
+
         }
 
 
@@ -959,10 +1768,15 @@ const deleteRoom = async (req, res) => {
         // =================================================
 
         await connection.query(`
+
             DELETE FROM rooms
+
             WHERE id = ?
+
         `, [
+
             id
+
         ]);
 
 
@@ -977,17 +1791,20 @@ const deleteRoom = async (req, res) => {
         // RESPONSE
         // =================================================
 
-        res.json({
+        return res.json({
+
             success: true,
+
             message:
                 "Kamar berhasil dihapus"
+
         });
 
     } catch (error) {
 
-        // -------------------------------------------------
+        // =================================================
         // ROLLBACK
-        // -------------------------------------------------
+        // =================================================
 
         try {
 
@@ -999,6 +1816,7 @@ const deleteRoom = async (req, res) => {
                 "Rollback Error:",
                 rollbackError
             );
+
         }
 
 
@@ -1008,17 +1826,24 @@ const deleteRoom = async (req, res) => {
         );
 
 
-        res.status(500).json({
+        return res.status(500).json({
+
             success: false,
+
             message:
                 "Gagal menghapus kamar",
-            error: error.message
+
+            error:
+                error.message
+
         });
 
     } finally {
 
         connection.release();
+
     }
+
 };
 
 
@@ -1027,9 +1852,17 @@ const deleteRoom = async (req, res) => {
 // =====================================================
 
 module.exports = {
+
     getRooms,
+
     getRoomById,
+
     createRoom,
+
     updateRoom,
-    deleteRoom
+
+    deleteRoom,
+
+    getPublicRooms
+
 };

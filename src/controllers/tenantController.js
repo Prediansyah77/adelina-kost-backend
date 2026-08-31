@@ -1,4 +1,5 @@
 const db = require("../config/database");
+const bcrypt = require("bcrypt");
 
 
 // ============================================================
@@ -6,26 +7,6 @@ const db = require("../config/database");
 // GET /api/tenants
 //
 // Menampilkan HANYA penghuni yang memiliki kontrak ACTIVE.
-//
-// Jika penghuni memiliki kontrak ACTIVE:
-// - contract_id ditampilkan
-// - room_id ditampilkan
-// - room_number ditampilkan
-// - start_date ditampilkan
-// - end_date ditampilkan
-// - monthly_price ditampilkan
-// - contract_status = active
-//
-// Jika penghuni:
-// - kontraknya selesai
-// - kontraknya dibatalkan
-// - tidak memiliki kontrak
-//
-// Maka penghuni TIDAK ditampilkan di halaman Penghuni.
-//
-// DATA TIDAK DIHAPUS DARI DATABASE.
-// Data tersebut tetap bisa dilihat melalui:
-// GET /api/tenants/history
 // ============================================================
 
 const getTenants = async (req, res) => {
@@ -61,6 +42,7 @@ const getTenants = async (req, res) => {
 
             INNER JOIN contracts c
                 ON c.id = (
+
                     SELECT
                         c2.id
 
@@ -85,7 +67,7 @@ const getTenants = async (req, res) => {
         `);
 
 
-        res.json({
+        return res.json({
 
             success: true,
 
@@ -102,7 +84,7 @@ const getTenants = async (req, res) => {
         );
 
 
-        res.status(500).json({
+        return res.status(500).json({
 
             success: false,
 
@@ -127,12 +109,9 @@ const getTenants = async (req, res) => {
 //
 // Termasuk:
 // - penghuni aktif
-// - penghuni yang sudah selesai kontrak
-// - penghuni yang pernah dibatalkan
-// - penghuni yang belum memiliki kontrak
-//
-// Endpoint ini TETAP seperti sebelumnya.
-// Tidak digunakan untuk halaman Penghuni aktif.
+// - penghuni selesai kontrak
+// - penghuni kontrak dibatalkan
+// - penghuni tanpa kontrak
 // ============================================================
 
 const getAllTenants = async (req, res) => {
@@ -168,6 +147,7 @@ const getAllTenants = async (req, res) => {
 
             LEFT JOIN contracts c
                 ON c.id = (
+
                     SELECT
                         c2.id
 
@@ -200,7 +180,7 @@ const getAllTenants = async (req, res) => {
         `);
 
 
-        res.json({
+        return res.json({
 
             success: true,
 
@@ -217,7 +197,7 @@ const getAllTenants = async (req, res) => {
         );
 
 
-        res.status(500).json({
+        return res.status(500).json({
 
             success: false,
 
@@ -241,14 +221,9 @@ const getAllTenants = async (req, res) => {
 // Menampilkan penghuni yang:
 //
 // 1. Pernah memiliki kontrak
-// 2. TIDAK memiliki kontrak ACTIVE
+// 2. Tidak memiliki kontrak ACTIVE
 //
-// Kontrak terakhir penghuni akan ditampilkan.
-//
-// Jika penghuni mempunyai kontrak active,
-// penghuni tersebut TIDAK masuk history.
-//
-// Data tenant dan kontraknya TETAP berada di database.
+// Yang ditampilkan adalah kontrak terakhir.
 // ============================================================
 
 const getTenantHistory = async (req, res) => {
@@ -355,7 +330,7 @@ const getTenantHistory = async (req, res) => {
         `);
 
 
-        res.json({
+        return res.json({
 
             success: true,
 
@@ -372,7 +347,7 @@ const getTenantHistory = async (req, res) => {
         );
 
 
-        res.status(500).json({
+        return res.status(500).json({
 
             success: false,
 
@@ -394,11 +369,11 @@ const getTenantHistory = async (req, res) => {
 // GET /api/tenants/:id
 //
 // Menampilkan:
-// - data penghuni
+// - data tenant
 // - kontrak aktif jika ada
 // - kamar jika ada
 //
-// Fitur tetap dipertahankan.
+// Tidak menampilkan password user.
 // ============================================================
 
 const getTenantById = async (req, res) => {
@@ -458,6 +433,7 @@ const getTenantById = async (req, res) => {
 
             LEFT JOIN contracts c
                 ON c.tenant_id = t.id
+
                 AND c.status = 'active'
 
             LEFT JOIN rooms r
@@ -466,12 +442,10 @@ const getTenantById = async (req, res) => {
             WHERE t.id = ?
 
             LIMIT 1
-        `, [id]);
+        `, [
+            id
+        ]);
 
-
-        // ====================================================
-        // TENANT TIDAK DITEMUKAN
-        // ====================================================
 
         if (
             tenants.length === 0
@@ -489,7 +463,7 @@ const getTenantById = async (req, res) => {
         }
 
 
-        res.json({
+        return res.json({
 
             success: true,
 
@@ -507,7 +481,7 @@ const getTenantById = async (req, res) => {
         );
 
 
-        res.status(500).json({
+        return res.status(500).json({
 
             success: false,
 
@@ -525,14 +499,501 @@ const getTenantById = async (req, res) => {
 
 
 // ============================================================
-// CREATE TENANT
+// GET CALON TENANTS
+// GET /api/tenants/calon
+//
+// Menampilkan calon penghuni.
+//
+// Data:
+// - nama
+// - HP
+// - alamat
+// - nomor KTP
+// - gender
+// - pekerjaan
+// - tujuan ngekos
+// - status
+// - tanggal daftar
+// - username
+//
+// Password TIDAK ditampilkan.
+// ============================================================
+
+const getCalonTenants = async (req, res) => {
+
+    try {
+
+        const [tenants] = await db.query(`
+            SELECT
+
+                t.id,
+
+                t.name,
+
+                t.phone,
+
+                t.address,
+
+                t.identity_number,
+
+                t.gender,
+
+                t.occupation,
+
+                t.boarding_purpose,
+
+                t.status,
+
+                t.created_at,
+
+                u.username
+
+            FROM tenants t
+
+            LEFT JOIN users u
+                ON u.tenant_id = t.id
+
+            WHERE t.status = 'calon'
+
+            ORDER BY
+                t.id DESC
+        `);
+
+
+        return res.json({
+
+            success: true,
+
+            data: tenants
+
+        });
+
+
+    } catch (error) {
+
+        console.error(
+            "Get Calon Tenants Error:",
+            error
+        );
+
+
+        return res.status(500).json({
+
+            success: false,
+
+            message:
+                "Gagal mengambil data calon penghuni",
+
+            error:
+                error.message
+
+        });
+
+    }
+
+};
+
+
+// ============================================================
+// GET DETAIL CALON TENANT
+// GET /api/tenants/calon/:id
+//
+// Menampilkan:
+//
+// DATA DIRI
+// - nama
+// - HP
+// - alamat
+// - nomor KTP
+// - gender
+// - pekerjaan
+// - tujuan ngekos
+//
+// AKUN
+// - username
+//
+// DOKUMEN
+// - foto KTP
+//
+// BOOKING
+// - kamar
+// - status
+// - lama booking
+// - nominal booking
+//
+// PEMBAYARAN BOOKING
+//
+// PEMBAYARAN FULL
+//
+// Password TIDAK PERNAH dikirim.
+// ============================================================
+
+const getCalonTenantById = async (req, res) => {
+
+    try {
+
+        const { id } = req.params;
+
+
+        // ====================================================
+        // VALIDASI ID
+        // ====================================================
+
+        if (
+            !id ||
+            Number.isNaN(Number(id))
+        ) {
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    "ID calon penghuni tidak valid"
+
+            });
+
+        }
+
+
+        // ====================================================
+        // DATA TENANT + USER
+        // ====================================================
+
+        const [tenantRows] =
+            await db.query(`
+                SELECT
+
+                    t.id,
+
+                    t.name,
+
+                    t.phone,
+
+                    t.address,
+
+                    t.identity_number,
+
+                    t.gender,
+
+                    t.occupation,
+
+                    t.boarding_purpose,
+
+                    t.status,
+
+                    t.created_at,
+
+                    u.username
+
+                FROM tenants t
+
+                LEFT JOIN users u
+                    ON u.tenant_id = t.id
+
+                WHERE t.id = ?
+
+                AND t.status = 'calon'
+
+                LIMIT 1
+            `, [
+                id
+            ]);
+
+
+        if (
+            tenantRows.length === 0
+        ) {
+
+            return res.status(404).json({
+
+                success: false,
+
+                message:
+                    "Calon penghuni tidak ditemukan"
+
+            });
+
+        }
+
+
+        const tenant =
+            tenantRows[0];
+
+
+        // ====================================================
+        // DOKUMEN KTP
+        // ====================================================
+
+        const [documentRows] =
+            await db.query(`
+                SELECT
+
+                    id,
+
+                    document_type,
+
+                    file_path,
+
+                    created_at
+
+                FROM tenant_documents
+
+                WHERE tenant_id = ?
+
+                AND document_type = 'ktp'
+
+                ORDER BY id DESC
+
+                LIMIT 1
+            `, [
+                id
+            ]);
+
+
+        // ====================================================
+        // BOOKING TERAKHIR
+        // ====================================================
+
+        const [bookingRows] =
+            await db.query(`
+                SELECT
+
+                    rb.id AS booking_id,
+
+                    rb.room_id,
+
+                    r.room_number,
+
+                    r.price AS room_price,
+
+                    rb.booking_days,
+
+                    rb.booking_amount,
+
+                    rb.requested_start_date,
+
+                    rb.booking_expired_at,
+
+                    rb.status AS booking_status,
+
+                    rb.created_at AS booking_created_at
+
+                FROM room_bookings rb
+
+                LEFT JOIN rooms r
+                    ON rb.room_id = r.id
+
+                WHERE rb.tenant_id = ?
+
+                ORDER BY rb.id DESC
+
+                LIMIT 1
+            `, [
+                id
+            ]);
+
+
+        // ====================================================
+        // PEMBAYARAN BOOKING
+        // ====================================================
+
+        let bookingPayment = null;
+
+
+        if (
+            bookingRows.length > 0
+        ) {
+
+            const [paymentRows] =
+                await db.query(`
+                    SELECT
+
+                        p.id AS payment_id,
+
+                        p.amount,
+
+                        p.payment_method,
+
+                        p.status,
+
+                        p.payment_date,
+
+                        p.proof_file,
+
+                        p.notes,
+
+                        p.created_at,
+
+                        p.bank_account_id,
+
+                        ba.bank_name,
+
+                        ba.account_number,
+
+                        ba.account_name
+
+                    FROM payments p
+
+                    LEFT JOIN bank_accounts ba
+                        ON p.bank_account_id = ba.id
+
+                    WHERE p.booking_id = ?
+
+                    ORDER BY p.id DESC
+
+                    LIMIT 1
+                `, [
+                    bookingRows[0].booking_id
+                ]);
+
+
+            if (
+                paymentRows.length > 0
+            ) {
+
+                bookingPayment =
+                    paymentRows[0];
+
+            }
+
+        }
+
+
+        // ====================================================
+        // PEMBAYARAN FULL
+        //
+        // Pembayaran full menggunakan bill_id.
+        // ====================================================
+
+        const [fullPaymentRows] =
+            await db.query(`
+                SELECT
+
+                    p.id AS payment_id,
+
+                    p.bill_id,
+
+                    p.amount,
+
+                    p.payment_method,
+
+                    p.status,
+
+                    p.payment_date,
+
+                    p.proof_file,
+
+                    p.notes,
+
+                    p.created_at,
+
+                    p.bank_account_id,
+
+                    ba.bank_name,
+
+                    ba.account_number,
+
+                    ba.account_name
+
+                FROM payments p
+
+                LEFT JOIN bank_accounts ba
+                    ON p.bank_account_id = ba.id
+
+                INNER JOIN bills b
+                    ON p.bill_id = b.id
+
+                INNER JOIN contracts c
+                    ON b.contract_id = c.id
+
+                WHERE c.tenant_id = ?
+
+                ORDER BY p.id DESC
+            `, [
+                id
+            ]);
+
+
+        // ====================================================
+        // RESPONSE
+        // ====================================================
+
+        return res.json({
+
+            success: true,
+
+            data: {
+
+                tenant,
+
+                document:
+                    documentRows.length > 0
+                        ? documentRows[0]
+                        : null,
+
+                booking:
+                    bookingRows.length > 0
+                        ? bookingRows[0]
+                        : null,
+
+                booking_payment:
+                    bookingPayment,
+
+                full_payments:
+                    fullPaymentRows
+
+            }
+
+        });
+
+
+    } catch (error) {
+
+        console.error(
+            "Get Calon Tenant By ID Error:",
+            error
+        );
+
+
+        return res.status(500).json({
+
+            success: false,
+
+            message:
+                "Gagal mengambil detail calon penghuni",
+
+            error:
+                error.message
+
+        });
+
+    }
+
+};
+
+
+// ============================================================
+// CREATE TENANT + USER ACCOUNT
 // POST /api/tenants
 //
-// Penghuni dibuat terlebih dahulu.
-// Kontrak dibuat melalui /api/contracts.
+// Membuat:
+//
+// 1. Data penghuni → tenants
+// 2. Akun login → users
+//
+// User:
+// role = penghuni
+//
+// Password:
+// HASH bcrypt
 // ============================================================
 
 const createTenant = async (req, res) => {
+
+    const connection =
+        await db.getConnection();
+
 
     try {
 
@@ -540,7 +1001,9 @@ const createTenant = async (req, res) => {
             name,
             phone,
             address,
-            identity_number
+            identity_number,
+            username,
+            password
         } = req.body;
 
 
@@ -566,7 +1029,49 @@ const createTenant = async (req, res) => {
 
 
         // ====================================================
-        // NORMALISASI DATA
+        // VALIDASI USERNAME
+        // ====================================================
+
+        if (
+            !username ||
+            !username.trim()
+        ) {
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    "Username penghuni wajib diisi"
+
+            });
+
+        }
+
+
+        // ====================================================
+        // VALIDASI PASSWORD
+        // ====================================================
+
+        if (
+            !password ||
+            !password.trim()
+        ) {
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    "Password penghuni wajib diisi"
+
+            });
+
+        }
+
+
+        // ====================================================
+        // NORMALISASI
         // ====================================================
 
         const tenantName =
@@ -587,13 +1092,99 @@ const createTenant = async (req, res) => {
                 ? identity_number.trim()
                 : null;
 
+        const tenantUsername =
+            username.trim();
+
+
+        // ====================================================
+        // VALIDASI USERNAME
+        // ====================================================
+
+        if (
+            tenantUsername.length < 4
+        ) {
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    "Username minimal 4 karakter"
+
+            });
+
+        }
+
+
+        // ====================================================
+        // VALIDASI PASSWORD
+        // ====================================================
+
+        if (
+            password.length < 6
+        ) {
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    "Password minimal 6 karakter"
+
+            });
+
+        }
+
+
+        // ====================================================
+        // CEK USERNAME
+        // ====================================================
+
+        const [existingUser] =
+            await connection.query(`
+                SELECT
+                    id,
+                    username
+
+                FROM users
+
+                WHERE username = ?
+
+                LIMIT 1
+            `, [
+                tenantUsername
+            ]);
+
+
+        if (
+            existingUser.length > 0
+        ) {
+
+            return res.status(409).json({
+
+                success: false,
+
+                message:
+                    "Username sudah digunakan. Silakan gunakan username lain."
+
+            });
+
+        }
+
+
+        // ====================================================
+        // MULAI TRANSACTION
+        // ====================================================
+
+        await connection.beginTransaction();
+
 
         // ====================================================
         // INSERT TENANT
         // ====================================================
 
-        const [result] =
-            await db.query(`
+        const [tenantResult] =
+            await connection.query(`
                 INSERT INTO tenants
                 (
                     name,
@@ -611,44 +1202,110 @@ const createTenant = async (req, res) => {
             ]);
 
 
+        const tenantId =
+            tenantResult.insertId;
+
+
         // ====================================================
-        // AMBIL DATA TERBARU
+        // HASH PASSWORD
+        // ====================================================
+
+        const hashedPassword =
+            await bcrypt.hash(
+                password,
+                10
+            );
+
+
+        // ====================================================
+        // INSERT USER
+        // ====================================================
+
+        await connection.query(`
+            INSERT INTO users
+            (
+                name,
+                username,
+                password,
+                role,
+                tenant_id
+            )
+
+            VALUES (?, ?, ?, 'penghuni', ?)
+        `, [
+            tenantName,
+            tenantUsername,
+            hashedPassword,
+            tenantId
+        ]);
+
+
+        // ====================================================
+        // COMMIT
+        // ====================================================
+
+        await connection.commit();
+
+
+        // ====================================================
+        // AMBIL DATA TENANT TERBARU
         // ====================================================
 
         const [tenant] =
-            await db.query(`
+            await connection.query(`
                 SELECT *
+
                 FROM tenants
+
                 WHERE id = ?
+
+                LIMIT 1
             `, [
-                result.insertId
+                tenantId
             ]);
 
 
-        res.status(201).json({
+        return res.status(201).json({
 
             success: true,
 
             message:
-                "Penghuni berhasil ditambahkan",
+                "Penghuni dan akun login berhasil dibuat",
 
-            data:
-                tenant[0]
+            data: {
+
+                tenant:
+                    tenant[0],
+
+                username:
+                    tenantUsername
+
+            }
 
         });
 
 
     } catch (error) {
 
+        try {
+
+            await connection.rollback();
+
+        } catch (rollbackError) {
+
+            console.error(
+                "Rollback Error:",
+                rollbackError
+            );
+
+        }
+
+
         console.error(
             "Create Tenant Error:",
             error
         );
 
-
-        // ====================================================
-        // DUPLICATE IDENTITY NUMBER
-        // ====================================================
 
         if (
             error.code ===
@@ -660,24 +1317,28 @@ const createTenant = async (req, res) => {
                 success: false,
 
                 message:
-                    "Nomor identitas sudah digunakan"
+                    "Username atau nomor identitas sudah digunakan"
 
             });
 
         }
 
 
-        res.status(500).json({
+        return res.status(500).json({
 
             success: false,
 
             message:
-                "Gagal menambahkan penghuni",
+                "Gagal menambahkan penghuni dan akun login",
 
             error:
                 error.message
 
         });
+
+    } finally {
+
+        connection.release();
 
     }
 
@@ -687,19 +1348,14 @@ const createTenant = async (req, res) => {
 // ============================================================
 // UPDATE TENANT
 // PUT /api/tenants/:id
-//
-// Memperbarui data pribadi penghuni.
-//
-// Tidak mengubah kontrak.
-// Tidak mengubah kamar.
-// Tidak mengubah tagihan.
 // ============================================================
 
 const updateTenant = async (req, res) => {
 
     try {
 
-        const { id } = req.params;
+        const { id } =
+            req.params;
 
 
         const {
@@ -767,7 +1423,9 @@ const updateTenant = async (req, res) => {
                 WHERE id = ?
 
                 LIMIT 1
-            `, [id]);
+            `, [
+                id
+            ]);
 
 
         if (
@@ -787,7 +1445,7 @@ const updateTenant = async (req, res) => {
 
 
         // ====================================================
-        // NORMALISASI DATA
+        // NORMALISASI
         // ====================================================
 
         const tenantName =
@@ -810,7 +1468,7 @@ const updateTenant = async (req, res) => {
 
 
         // ====================================================
-        // UPDATE
+        // UPDATE TENANT
         // ====================================================
 
         await db.query(`
@@ -837,18 +1495,40 @@ const updateTenant = async (req, res) => {
 
 
         // ====================================================
+        // SINKRONISASI NAMA USER
+        // ====================================================
+
+        await db.query(`
+            UPDATE users
+
+            SET name = ?
+
+            WHERE tenant_id = ?
+        `, [
+            tenantName,
+            id
+        ]);
+
+
+        // ====================================================
         // AMBIL DATA TERBARU
         // ====================================================
 
         const [tenant] =
             await db.query(`
                 SELECT *
+
                 FROM tenants
+
                 WHERE id = ?
-            `, [id]);
+
+                LIMIT 1
+            `, [
+                id
+            ]);
 
 
-        res.json({
+        return res.json({
 
             success: true,
 
@@ -886,7 +1566,7 @@ const updateTenant = async (req, res) => {
         }
 
 
-        res.status(500).json({
+        return res.status(500).json({
 
             success: false,
 
@@ -906,21 +1586,6 @@ const updateTenant = async (req, res) => {
 // ============================================================
 // DELETE TENANT
 // DELETE /api/tenants/:id
-//
-// ATURAN:
-//
-// 1. Tenant tidak boleh dihapus jika kontrak ACTIVE.
-//
-// 2. Tenant tidak boleh dihapus jika pernah mempunyai kontrak.
-//
-// 3. Hanya tenant yang benar-benar belum pernah digunakan
-//    yang boleh dihapus.
-//
-// Tujuannya agar:
-// - history aman
-// - kontrak aman
-// - tagihan aman
-// - relasi database aman
 // ============================================================
 
 const deleteTenant = async (req, res) => {
@@ -931,7 +1596,8 @@ const deleteTenant = async (req, res) => {
 
     try {
 
-        const { id } = req.params;
+        const { id } =
+            req.params;
 
 
         // ====================================================
@@ -970,7 +1636,9 @@ const deleteTenant = async (req, res) => {
                 WHERE id = ?
 
                 LIMIT 1
-            `, [id]);
+            `, [
+                id
+            ]);
 
 
         if (
@@ -1011,12 +1679,10 @@ const deleteTenant = async (req, res) => {
                 AND status = 'active'
 
                 LIMIT 1
-            `, [id]);
+            `, [
+                id
+            ]);
 
-
-        // ====================================================
-        // MASIH AKTIF
-        // ====================================================
 
         if (
             activeContracts.length > 0
@@ -1049,12 +1715,10 @@ const deleteTenant = async (req, res) => {
                 WHERE tenant_id = ?
 
                 LIMIT 1
-            `, [id]);
+            `, [
+                id
+            ]);
 
-
-        // ====================================================
-        // SUDAH PERNAH PUNYA KONTRAK
-        // ====================================================
 
         if (
             oldContracts.length > 0
@@ -1080,6 +1744,19 @@ const deleteTenant = async (req, res) => {
 
 
         // ====================================================
+        // HAPUS USER PENGHUNI
+        // ====================================================
+
+        await connection.query(`
+            DELETE FROM users
+
+            WHERE tenant_id = ?
+        `, [
+            id
+        ]);
+
+
+        // ====================================================
         // DELETE TENANT
         // ====================================================
 
@@ -1088,7 +1765,9 @@ const deleteTenant = async (req, res) => {
                 DELETE FROM tenants
 
                 WHERE id = ?
-            `, [id]);
+            `, [
+                id
+            ]);
 
 
         // ====================================================
@@ -1120,25 +1799,17 @@ const deleteTenant = async (req, res) => {
         await connection.commit();
 
 
-        // ====================================================
-        // RESPONSE
-        // ====================================================
-
-        res.json({
+        return res.json({
 
             success: true,
 
             message:
-                `Penghuni ${tenant.name} berhasil dihapus`
+                `Penghuni ${tenant.name} dan akun loginnya berhasil dihapus`
 
         });
 
 
     } catch (error) {
-
-        // ====================================================
-        // ROLLBACK
-        // ====================================================
 
         try {
 
@@ -1160,10 +1831,6 @@ const deleteTenant = async (req, res) => {
         );
 
 
-        // ====================================================
-        // FOREIGN KEY ERROR
-        // ====================================================
-
         if (
             error.code ===
             "ER_ROW_IS_REFERENCED_2"
@@ -1181,7 +1848,7 @@ const deleteTenant = async (req, res) => {
         }
 
 
-        res.status(500).json({
+        return res.status(500).json({
 
             success: false,
 
@@ -1205,6 +1872,12 @@ const deleteTenant = async (req, res) => {
 // ============================================================
 // EXPORT
 // ============================================================
+//
+// PENTING:
+// getCalonTenants dan getCalonTenantById
+// HARUS diexport agar bisa dipakai tenantRoutes.js.
+//
+// ============================================================
 
 module.exports = {
 
@@ -1215,6 +1888,10 @@ module.exports = {
     getTenantById,
 
     getTenantHistory,
+
+    getCalonTenants,
+
+    getCalonTenantById,
 
     createTenant,
 

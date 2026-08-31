@@ -1,31 +1,25 @@
 const express = require("express");
 
 const {
-
     getTenants,
     getAllTenants,
     getTenantById,
     getTenantHistory,
+    getCalonTenants,
+    getCalonTenantById,
     createTenant,
     updateTenant,
     deleteTenant
-
 } = require("../controllers/tenantController");
 
 const router = express.Router();
 
 
 // ============================================================
-// GET ALL TENANTS
+// GET ACTIVE TENANTS
 // GET /api/tenants
 //
 // Menampilkan penghuni yang memiliki kontrak ACTIVE.
-//
-// Dipertahankan untuk kebutuhan:
-// - dropdown penghuni
-// - kontrak
-// - pembayaran
-// - fitur lain yang membutuhkan penghuni aktif
 // ============================================================
 
 router.get(
@@ -35,7 +29,7 @@ router.get(
 
 
 // ============================================================
-// GET ALL TENANTS INCLUDING WITHOUT CONTRACT
+// GET ALL TENANTS
 // GET /api/tenants/all
 //
 // Menampilkan seluruh penghuni:
@@ -44,7 +38,7 @@ router.get(
 // - kontrak selesai
 // - kontrak dibatalkan
 //
-// Route ini HARUS berada sebelum /:id.
+// HARUS sebelum /:id
 // ============================================================
 
 router.get(
@@ -60,12 +54,48 @@ router.get(
 // Menampilkan penghuni yang sudah tidak memiliki
 // kontrak active.
 //
-// Route ini HARUS berada sebelum /:id.
+// HARUS sebelum /:id
 // ============================================================
 
 router.get(
     "/history",
     getTenantHistory
+);
+
+
+// ============================================================
+// GET CALON TENANTS
+// GET /api/tenants/calon
+//
+// Menampilkan calon penghuni.
+//
+// HARUS sebelum /:id
+// ============================================================
+
+router.get(
+    "/calon",
+    getCalonTenants
+);
+
+
+// ============================================================
+// GET DETAIL CALON TENANT
+// GET /api/tenants/calon/:id
+//
+// Menampilkan detail calon penghuni:
+// - data diri
+// - username
+// - KTP
+// - booking
+// - pembayaran booking
+// - pembayaran full
+//
+// HARUS sebelum /:id
+// ============================================================
+
+router.get(
+    "/calon/:id",
+    getCalonTenantById
 );
 
 

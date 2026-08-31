@@ -16,25 +16,84 @@ const {
 } = require("./jobs/whatsappReminderJob");
 
 
+
 // ======================================================
 // IMPORT ROUTES
 // ======================================================
 
-const roomRoutes = require("./routes/roomRoutes");
-const buildingRoutes = require("./routes/buildingRoutes");
-const floorRoutes = require("./routes/floorRoutes");
-const tenantRoutes = require("./routes/tenantRoutes");
-const contractRoutes = require("./routes/contractRoutes");
-const billRoutes = require("./routes/billRoutes");
-const paymentRoutes = require("./routes/paymentRoutes");
-const dashboardRoutes = require("./routes/dashboardRoutes");
-const incomeRoutes = require("./routes/incomeRoutes");
-const expenseRoutes = require("./routes/expenseRoutes");
-const bankAccountRoutes = require("./routes/bankAccountRoutes");
-const reconciliationRoutes = require("./routes/reconciliationRoutes");
-const authRoutes = require("./routes/authRoutes");
-const reportRoutes = require("./routes/reportRoutes");
-const tenantDocumentRoutes = require("./routes/tenantDocumentRoutes");
+const roomRoutes =
+    require("./routes/roomRoutes");
+
+const buildingRoutes =
+    require("./routes/buildingRoutes");
+
+const floorRoutes =
+    require("./routes/floorRoutes");
+
+const tenantRoutes =
+    require("./routes/tenantRoutes");
+
+const contractRoutes =
+    require("./routes/contractRoutes");
+
+const billRoutes =
+    require("./routes/billRoutes");
+
+const paymentRoutes =
+    require("./routes/paymentRoutes");
+
+const dashboardRoutes =
+    require("./routes/dashboardRoutes");
+
+const incomeRoutes =
+    require("./routes/incomeRoutes");
+
+const expenseRoutes =
+    require("./routes/expenseRoutes");
+
+const bankAccountRoutes =
+    require("./routes/bankAccountRoutes");
+
+const reconciliationRoutes =
+    require("./routes/reconciliationRoutes");
+
+const authRoutes =
+    require("./routes/authRoutes");
+
+const reportRoutes =
+    require("./routes/reportRoutes");
+
+const tenantDocumentRoutes =
+    require("./routes/tenantDocumentRoutes");
+
+
+
+// ======================================================
+// ROUTE BOOKING KAMAR
+// ======================================================
+//
+// Digunakan untuk:
+// - calon penghuni membuat pengajuan booking
+// - sistem menyimpan pengajuan ke room_bookings
+//
+// Endpoint:
+// POST /api/bookings
+//
+// ======================================================
+
+const bookingRoutes =
+    require("./routes/bookingRoutes");
+
+
+
+// ======================================================
+// TAMBAHAN
+// ROUTE AKUN PENGHUNI
+// ======================================================
+
+const tenantAccountRoutes =
+    require("./routes/tenantAccountRoutes");
+
 
 
 // ======================================================
@@ -45,6 +104,16 @@ const authenticateToken =
     require("./middleware/authMiddleware");
 
 
+
+// ======================================================
+// MIDDLEWARE ROLE
+// ======================================================
+
+const authorizeRole =
+    require("./middleware/roleMiddleware");
+
+
+
 // ======================================================
 // APP
 // ======================================================
@@ -52,6 +121,7 @@ const authenticateToken =
 const app = express();
 
 const PORT = 5000;
+
 
 
 // ======================================================
@@ -71,27 +141,40 @@ app.use(cors());
 app.use(express.json());
 
 
+
 // ======================================================
 // STATIC UPLOADS
 // ======================================================
 //
-// Membuat folder:
-// src/uploads
+// Folder:
 //
-// bisa diakses melalui:
+// adelina-kos-backend/
+// ├── src/
+// │   └── app.js
+// │
+// └── uploads/
+//     └── payment-proofs/
+//
+// URL:
+//
 // http://localhost:5000/uploads/
 //
-// Contoh file KTP:
-// http://localhost:5000/uploads/ktp/tenant-6-ktp-xxxxxxxx.jpg
+// Contoh bukti:
+//
+// http://localhost:5000/uploads/payment-proofs/payment-xxxxx.png
 //
 // ======================================================
 
 app.use(
     "/uploads",
     express.static(
-        path.join(__dirname, "uploads")
+        path.join(
+            __dirname,
+            "../uploads"
+        )
     )
 );
+
 
 
 // ======================================================
@@ -178,13 +261,35 @@ console.log(
     typeof tenantDocumentRoutes
 );
 
+console.log(
+    "bookingRoutes:",
+    typeof bookingRoutes
+);
+
+console.log(
+    "tenantAccountRoutes:",
+    typeof tenantAccountRoutes
+);
+
+console.log(
+    "authenticateToken:",
+    typeof authenticateToken
+);
+
+console.log(
+    "authorizeRole:",
+    typeof authorizeRole
+);
+
 console.log("========================================");
 console.log("");
+
 
 
 // ======================================================
 // API ROUTES
 // ======================================================
+
 
 
 // ======================================================
@@ -197,6 +302,7 @@ app.use(
 );
 
 
+
 // ======================================================
 // BUILDINGS
 // ======================================================
@@ -205,6 +311,7 @@ app.use(
     "/api/buildings",
     buildingRoutes
 );
+
 
 
 // ======================================================
@@ -217,6 +324,7 @@ app.use(
 );
 
 
+
 // ======================================================
 // TENANTS
 // ======================================================
@@ -225,6 +333,7 @@ app.use(
     "/api/tenants",
     tenantRoutes
 );
+
 
 
 // ======================================================
@@ -237,6 +346,7 @@ app.use(
 );
 
 
+
 // ======================================================
 // BILLS
 // ======================================================
@@ -245,6 +355,7 @@ app.use(
     "/api/bills",
     billRoutes
 );
+
 
 
 // ======================================================
@@ -257,6 +368,7 @@ app.use(
 );
 
 
+
 // ======================================================
 // DASHBOARD
 // ======================================================
@@ -265,6 +377,7 @@ app.use(
     "/api/dashboard",
     dashboardRoutes
 );
+
 
 
 // ======================================================
@@ -277,6 +390,7 @@ app.use(
 );
 
 
+
 // ======================================================
 // EXPENSES
 // ======================================================
@@ -285,6 +399,7 @@ app.use(
     "/api/expenses",
     expenseRoutes
 );
+
 
 
 // ======================================================
@@ -297,6 +412,7 @@ app.use(
 );
 
 
+
 // ======================================================
 // RECONCILIATIONS
 // ======================================================
@@ -305,6 +421,7 @@ app.use(
     "/api/reconciliations",
     reconciliationRoutes
 );
+
 
 
 // ======================================================
@@ -317,6 +434,7 @@ app.use(
 );
 
 
+
 // ======================================================
 // REPORTS
 // ======================================================
@@ -327,6 +445,7 @@ app.use(
 );
 
 
+
 // ======================================================
 // TENANT DOCUMENTS
 // ======================================================
@@ -335,6 +454,48 @@ app.use(
     "/api/tenant-documents",
     tenantDocumentRoutes
 );
+
+
+
+// ======================================================
+// BOOKING KAMAR
+// ======================================================
+//
+// Endpoint:
+//
+// POST /api/bookings
+//
+// Middleware:
+//
+// authenticateToken
+// authorizeRole("penghuni")
+//
+// tenant_id diambil dari JWT.
+//
+// ======================================================
+
+app.use(
+    "/api/bookings",
+    bookingRoutes
+);
+
+
+
+// ======================================================
+// TENANT ACCOUNTS
+// ======================================================
+//
+// Digunakan untuk:
+// - membuat akun login penghuni
+// - mengecek akun login penghuni
+//
+// ======================================================
+
+app.use(
+    "/api/tenant-accounts",
+    tenantAccountRoutes
+);
+
 
 
 // ======================================================
@@ -350,7 +511,8 @@ app.get(
 
             success: true,
 
-            message: "Token valid",
+            message:
+                "Token valid",
 
             data: {
                 user: req.user
@@ -360,6 +522,64 @@ app.get(
 
     }
 );
+
+
+
+// ======================================================
+// ROLE TEST
+// ======================================================
+//
+// Endpoint sementara untuk memastikan middleware role
+// sudah bekerja.
+//
+// ======================================================
+
+app.get(
+    "/api/auth/admin-test",
+    authenticateToken,
+    authorizeRole("ADMIN"),
+    (req, res) => {
+
+        res.json({
+
+            success: true,
+
+            message:
+                "Akses ADMIN berhasil",
+
+            data: {
+                user: req.user
+            }
+
+        });
+
+    }
+);
+
+
+
+app.get(
+    "/api/auth/penghuni-test",
+    authenticateToken,
+    authorizeRole("PENGHUNI"),
+    (req, res) => {
+
+        res.json({
+
+            success: true,
+
+            message:
+                "Akses PENGHUNI berhasil",
+
+            data: {
+                user: req.user
+            }
+
+        });
+
+    }
+);
+
 
 
 // ======================================================
@@ -383,6 +603,7 @@ app.get(
 );
 
 
+
 // ======================================================
 // TEST DATABASE
 // ======================================================
@@ -398,7 +619,6 @@ app.get(
                     "SELECT 1 AS connected"
                 );
 
-
             res.json({
 
                 success: true,
@@ -406,7 +626,8 @@ app.get(
                 message:
                     "Database Adelina Kost berhasil terhubung",
 
-                data: rows
+                data:
+                    rows
 
             });
 
@@ -416,7 +637,6 @@ app.get(
                 "Database Error:",
                 error
             );
-
 
             res.status(500).json({
 
@@ -436,6 +656,7 @@ app.get(
 );
 
 
+
 // ======================================================
 // WHATSAPP REMINDER CRON JOB
 // ======================================================
@@ -447,6 +668,7 @@ app.get(
 
 cron.schedule(
     "0 9 * * *",
+
     async () => {
 
         console.log("");
@@ -464,7 +686,8 @@ cron.schedule(
             new Date().toLocaleString(
                 "id-ID",
                 {
-                    timeZone: "Asia/Jakarta"
+                    timeZone:
+                        "Asia/Jakarta"
                 }
             )
         );
@@ -474,22 +697,20 @@ cron.schedule(
         );
 
 
+
         try {
 
             const result =
                 await runWhatsAppReminderJob();
 
-
             console.log(
                 "WhatsApp Reminder Job selesai."
             );
-
 
             console.log(
                 "Hasil:",
                 result
             );
-
 
         } catch (error) {
 
@@ -501,6 +722,7 @@ cron.schedule(
         }
 
 
+
         console.log(
             "========================================"
         );
@@ -508,10 +730,14 @@ cron.schedule(
         console.log("");
 
     },
+
     {
-        timezone: "Asia/Jakarta"
+        timezone:
+            "Asia/Jakarta"
     }
+
 );
+
 
 
 // ======================================================
@@ -520,6 +746,7 @@ cron.schedule(
 
 app.listen(
     PORT,
+
     () => {
 
         console.log(
@@ -548,6 +775,14 @@ app.listen(
 
         console.log(
             `Reconciliations: http://localhost:${PORT}/api/reconciliations`
+        );
+
+        console.log(
+            `Tenant Accounts: http://localhost:${PORT}/api/tenant-accounts`
+        );
+
+        console.log(
+            `Bookings: http://localhost:${PORT}/api/bookings`
         );
 
         console.log(

@@ -5,24 +5,87 @@ const {
     getRoomById,
     createRoom,
     updateRoom,
-    deleteRoom
+    deleteRoom,
+    getPublicRooms,
 } = require("../controllers/roomController");
 
 const router = express.Router();
 
+
+// ============================================================
+// GET PUBLIC ROOMS
+// GET /api/rooms/public
+//
+// Harus diletakkan sebelum /:id
+// supaya "public" tidak dianggap sebagai ID.
+// ============================================================
+
+router.get(
+    "/public",
+    getPublicRooms
+);
+
+
+// ============================================================
 // GET ALL ROOMS
-router.get("/", getRooms);
+// GET /api/rooms
+//
+// Digunakan oleh ADMIN.
+// Mengambil seluruh kamar.
+// ============================================================
 
+router.get(
+    "/",
+    getRooms
+);
+
+
+// ============================================================
 // GET ROOM BY ID
-router.get("/:id", getRoomById);
+// GET /api/rooms/:id
+// ============================================================
 
+router.get(
+    "/:id",
+    getRoomById
+);
+
+
+// ============================================================
 // CREATE ROOM
-router.post("/", createRoom);
+// POST /api/rooms
+// ============================================================
 
+router.post(
+    "/",
+    createRoom
+);
+
+
+// ============================================================
 // UPDATE ROOM
-router.put("/:id", updateRoom);
+// PUT /api/rooms/:id
+// ============================================================
 
+router.put(
+    "/:id",
+    updateRoom
+);
+
+
+// ============================================================
 // DELETE ROOM
-router.delete("/:id", deleteRoom);
+// DELETE /api/rooms/:id
+// ============================================================
+
+router.delete(
+    "/:id",
+    deleteRoom
+);
+
+
+// ============================================================
+// EXPORT
+// ============================================================
 
 module.exports = router;
