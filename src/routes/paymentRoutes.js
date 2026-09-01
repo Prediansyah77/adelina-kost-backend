@@ -6,8 +6,10 @@ const {
     createPayment,
     createTenantPayment,
     createBookingPayment,
+    createFullPayment,
     verifyPayment,
     verifyBookingPayment,
+    verifyFullPayment,
     rejectPayment,
     updatePayment,
     deletePayment,
@@ -39,11 +41,17 @@ console.log(
         createBookingPayment:
             typeof createBookingPayment,
 
+        createFullPayment:
+            typeof createFullPayment,
+
         verifyPayment:
             typeof verifyPayment,
 
         verifyBookingPayment:
             typeof verifyBookingPayment,
+
+        verifyFullPayment:
+            typeof verifyFullPayment,
 
         rejectPayment:
             typeof rejectPayment,
@@ -149,22 +157,6 @@ router.get(
 // Digunakan oleh:
 // TenantDashboard.jsx
 //
-// Untuk menampilkan:
-// - pembayaran terakhir
-// - status pembayaran
-// - nominal
-// - tanggal pembayaran
-// - metode pembayaran
-// - bukti pembayaran
-// ======================================================
-//
-// PENTING:
-// Route ini HARUS berada sebelum:
-//
-// /:id
-//
-// Karena kalau setelah /:id,
-// "my-payments" akan dianggap sebagai ID.
 // ======================================================
 
 router.get(
@@ -187,18 +179,7 @@ router.get(
 //
 // KHUSUS PENGHUNI
 //
-// Alur:
-//
-// PENGHUNI
-//     ↓
-// Upload bukti transfer
-//     ↓
-// Submit pembayaran
-//     ↓
-// status = pending
-//     ↓
-// ADMIN VERIFIKASI / TOLAK
-//
+// Pembayaran tagihan biasa.
 // ======================================================
 
 router.post(
@@ -219,7 +200,7 @@ router.post(
 
 
 // ======================================================
-// CREATE PEMBAYARAN BOOKING
+// CREATE PEMBAYARAN BOOKING / DP
 //
 // POST /api/payments/booking
 //
@@ -235,20 +216,10 @@ router.post(
 //     ↓
 // kirim pembayaran
 //
-// Status payment:
-// pending
+// Fungsi:
+// createBookingPayment()
 //
-// Status booking:
-// pending
-//
-// Status kamar:
-// available → booked
-//
-// Saldo bank:
-// BELUM bertambah
-//
-// Saldo bertambah setelah admin
-// melakukan verifikasi.
+// JANGAN DIGABUNG DENGAN FULL PAYMENT.
 // ======================================================
 
 router.post(
@@ -269,24 +240,75 @@ router.post(
 
 
 // ======================================================
+// CREATE PEMBAYARAN LUNAS
+//
+// POST /api/payments/full
+//
+// KHUSUS PENGHUNI
+//
+// Alur:
+//
+// pilih kamar
+//     ↓
+// pilih "Pesan Kamar Tanpa DP"
+//     ↓
+// pembayaran 1 bulan penuh
+//     ↓
+// upload bukti transfer
+//     ↓
+// submit
+//
+// Fungsi:
+// createFullPayment()
+//
+// Status payment:
+// pending
+//
+// Status booking:
+// pending
+//
+// Status kamar:
+// available → booked
+//
+// Tenant:
+// tetap calon
+//
+// Kontrak:
+// BELUM dibuat
+//
+// Saldo bank:
+// BELUM bertambah
+//
+// Semua finalisasi dilakukan ketika
+// admin memverifikasi pembayaran.
+// ======================================================
+
+router.post(
+
+    "/full",
+
+    authenticateToken,
+
+    authorizeRole("penghuni"),
+
+    uploadPaymentProof.single(
+        "proof_file"
+    ),
+
+    createFullPayment
+
+);
+
+
+// ======================================================
 // VERIFY PEMBAYARAN BOOKING
 //
 // PATCH /api/payments/booking/:id/verify
 //
 // KHUSUS ADMIN
 //
-// Alur:
-//
-// payment pending
-//       ↓
-// admin verifikasi
-//       ↓
-// payment verified
-//       ↓
-// booking approved
-//       ↓
-// saldo bank bertambah
-//
+// Digunakan untuk pembayaran yang dibuat
+// melalui createBookingPayment().
 // ======================================================
 
 router.patch(
@@ -303,24 +325,55 @@ router.patch(
 
 
 // ======================================================
+// VERIFY PEMBAYARAN FULL
+//
+// PATCH /api/payments/full/:id/verify
+//
+// KHUSUS ADMIN
+//
+// Digunakan untuk pembayaran yang dibuat
+// melalui createFullPayment().
+//
+// Alur:
+//
+// payment pending
+//     ↓
+// admin verifikasi
+//     ↓
+// payment verified
+//     ↓
+// booking approved
+//     ↓
+// tenant aktif
+//     ↓
+// contract active
+//     ↓
+// room occupied
+//     ↓
+// saldo bank bertambah
+//     ↓
+// bill bulan berikutnya dibuat
+// ======================================================
+
+router.patch(
+
+    "/full/:id/verify",
+
+    authenticateToken,
+
+    authorizeRole("admin"),
+
+    verifyFullPayment
+
+);
+
+
+// ======================================================
 // VERIFY PEMBAYARAN TAGIHAN
 //
 // PATCH /api/payments/:id/verify
 //
 // KHUSUS ADMIN
-//
-// Alur:
-//
-// pending
-//    ↓
-// verified
-//    ↓
-// saldo bank bertambah
-//    ↓
-// bill diperbarui
-//    ↓
-// jika lunas → next bill dibuat
-//
 // ======================================================
 
 router.patch(
@@ -342,22 +395,6 @@ router.patch(
 // PATCH /api/payments/:id/reject
 //
 // KHUSUS ADMIN
-//
-// Alur:
-//
-// pending
-//    ↓
-// rejected
-//
-// Saldo bank:
-// TIDAK berubah
-//
-// Bill:
-// tetap unpaid
-//
-// Tenant:
-// bisa melakukan pembayaran ulang
-//
 // ======================================================
 
 router.patch(
@@ -381,12 +418,7 @@ router.patch(
 // KHUSUS ADMIN
 //
 // PENTING:
-// Route ini diletakkan setelah route khusus
-// seperti:
-//
-// /summary
-// /my-payments
-//
+// Route ini setelah route khusus.
 // ======================================================
 
 router.get(
@@ -409,8 +441,7 @@ router.get(
 //
 // KHUSUS ADMIN
 //
-// Fitur pembayaran manual/admin
-// tetap dipertahankan.
+// Pembayaran manual/admin.
 // ======================================================
 
 router.post(

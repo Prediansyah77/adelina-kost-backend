@@ -452,10 +452,6 @@ const createBooking = async (req, res) => {
         // Nanti user memilih durasi di halaman
         // pembayaran booking.
         //
-        // Jadi nominal awal:
-        //
-        // price / 30
-        //
         // =================================================
 
         const bookingDays =
@@ -691,8 +687,12 @@ const createBooking = async (req, res) => {
 // - kamar
 // - harga kamar
 // - lama booking
-// - nominal booking
-// - status
+// - total booking
+// - total sudah dibayar
+// - total pending
+// - sisa pembayaran
+// - status pembayaran
+// - status booking
 //
 // =====================================================
 
@@ -748,6 +748,19 @@ const getBookingById = async (req, res) => {
         // =================================================
         // QUERY BOOKING
         // =================================================
+        //
+        // Sekaligus mengambil:
+        //
+        // total_paid:
+        // pembayaran dengan status verified
+        //
+        // total_pending:
+        // pembayaran dengan status pending
+        //
+        // rejected:
+        // tidak dihitung
+        //
+        // =================================================
 
         const [rows] =
             await db.query(`
@@ -764,6 +777,47 @@ const getBookingById = async (req, res) => {
 
                     rb.booking_amount,
 
+
+                    /* =====================================
+                       TOTAL SUDAH DIBAYAR
+                       ===================================== */
+
+                    COALESCE(
+                        (
+                            SELECT
+                                SUM(p.amount)
+
+                            FROM payments p
+
+                            WHERE p.booking_id = rb.id
+
+                            AND p.status = 'verified'
+
+                        ),
+                        0
+                    ) AS total_paid,
+
+
+                    /* =====================================
+                       TOTAL PEMBAYARAN PENDING
+                       ===================================== */
+
+                    COALESCE(
+                        (
+                            SELECT
+                                SUM(p.amount)
+
+                            FROM payments p
+
+                            WHERE p.booking_id = rb.id
+
+                            AND p.status = 'pending'
+
+                        ),
+                        0
+                    ) AS total_pending,
+
+
                     rb.requested_start_date,
 
                     rb.notes,
@@ -773,6 +827,11 @@ const getBookingById = async (req, res) => {
                     rb.rejection_reason,
 
                     rb.created_at,
+
+
+                    /* =====================================
+                       TENANT
+                       ===================================== */
 
                     t.name AS tenant_name,
 
@@ -788,27 +847,48 @@ const getBookingById = async (req, res) => {
 
                     t.boarding_purpose,
 
+
+                    /* =====================================
+                       ROOM
+                       ===================================== */
+
                     r.room_number,
 
                     r.price AS room_price,
 
+
+                    /* =====================================
+                       BUILDING
+                       ===================================== */
+
                     b.name AS building_name,
+
+
+                    /* =====================================
+                       FLOOR
+                       ===================================== */
 
                     f.name AS floor_name
 
+
                 FROM room_bookings rb
+
 
                 INNER JOIN tenants t
                     ON rb.tenant_id = t.id
 
+
                 INNER JOIN rooms r
                     ON rb.room_id = r.id
+
 
                 LEFT JOIN buildings b
                     ON r.building_id = b.id
 
+
                 LEFT JOIN floors f
                     ON r.floor_id = f.id
+
 
                 WHERE rb.id = ?
 
@@ -880,6 +960,91 @@ const getBookingById = async (req, res) => {
 
 
         // =================================================
+        // HITUNG TOTAL BOOKING
+        // =================================================
+
+        const bookingAmount =
+            Number(
+                booking.booking_amount
+            ) || 0;
+
+
+        // =================================================
+        // TOTAL SUDAH DIBAYAR
+        //
+        // HANYA VERIFIED
+        // =================================================
+
+        const totalPaid =
+            Number(
+                booking.total_paid
+            ) || 0;
+
+
+        // =================================================
+        // TOTAL PENDING
+        // =================================================
+
+        const totalPending =
+            Number(
+                booking.total_pending
+            ) || 0;
+
+
+        // =================================================
+        // HITUNG SISA PEMBAYARAN
+        //
+        // Rumus:
+        //
+        // total booking - total verified
+        //
+        // =================================================
+
+        const remainingPayment =
+            Math.max(
+                bookingAmount -
+                totalPaid,
+                0
+            );
+
+
+        // =================================================
+        // STATUS PEMBAYARAN
+        // =================================================
+        //
+        // paid:
+        // total verified sudah mencukupi
+        //
+        // pending:
+        // ada pembayaran menunggu verifikasi
+        //
+        // unpaid:
+        // belum ada pembayaran verified
+        //
+        // =================================================
+
+        let paymentStatus =
+            "unpaid";
+
+
+        if (
+            remainingPayment <= 0
+        ) {
+
+            paymentStatus =
+                "paid";
+
+        } else if (
+            totalPending > 0
+        ) {
+
+            paymentStatus =
+                "pending";
+
+        }
+
+
+        // =================================================
         // RESPONSE
         // =================================================
 
@@ -888,6 +1053,10 @@ const getBookingById = async (req, res) => {
             success: true,
 
             data: {
+
+                // =========================================
+                // BOOKING
+                // =========================================
 
                 booking: {
 
@@ -905,10 +1074,52 @@ const getBookingById = async (req, res) => {
                             booking.booking_days
                         ),
 
+
+                    // =====================================
+                    // TOTAL YANG HARUS DIBAYAR
+                    // =====================================
+
                     amount:
-                        Number(
-                            booking.booking_amount
-                        ),
+                        bookingAmount,
+
+
+                    // =====================================
+                    // TOTAL SUDAH DIBAYAR
+                    //
+                    // VERIFIED SAJA
+                    // =====================================
+
+                    total_paid:
+                        totalPaid,
+
+
+                    // =====================================
+                    // TOTAL MENUNGGU VERIFIKASI
+                    // =====================================
+
+                    total_pending:
+                        totalPending,
+
+
+                    // =====================================
+                    // SISA PEMBAYARAN
+                    // =====================================
+
+                    remaining_payment:
+                        remainingPayment,
+
+
+                    // =====================================
+                    // STATUS PEMBAYARAN
+                    // =====================================
+
+                    payment_status:
+                        paymentStatus,
+
+
+                    // =====================================
+                    // DATA BOOKING
+                    // =====================================
 
                     requested_start_date:
                         booking.requested_start_date,
@@ -926,6 +1137,11 @@ const getBookingById = async (req, res) => {
                         booking.created_at
 
                 },
+
+
+                // =========================================
+                // TENANT
+                // =========================================
 
                 tenant: {
 
@@ -954,6 +1170,11 @@ const getBookingById = async (req, res) => {
                         booking.boarding_purpose
 
                 },
+
+
+                // =========================================
+                // ROOM
+                // =========================================
 
                 room: {
 
@@ -1020,6 +1241,14 @@ const getBookingById = async (req, res) => {
 // Booking terbaru yang aktif/paling terakhir dibuat
 // akan dikembalikan.
 //
+// Sekarang response juga memiliki:
+//
+// - amount
+// - total_paid
+// - total_pending
+// - remaining_payment
+// - payment_status
+//
 // =====================================================
 
 const getMyBooking = async (req, res) => {
@@ -1072,6 +1301,12 @@ const getMyBooking = async (req, res) => {
 
         // =================================================
         // AMBIL BOOKING TERBARU MILIK TENANT
+        //
+        // SEKALIGUS HITUNG:
+        //
+        // total_paid
+        // total_pending
+        //
         // =================================================
 
         const [rows] =
@@ -1089,6 +1324,47 @@ const getMyBooking = async (req, res) => {
 
                     rb.booking_amount,
 
+
+                    /* =====================================
+                       TOTAL PEMBAYARAN VERIFIED
+                       ===================================== */
+
+                    COALESCE(
+                        (
+                            SELECT
+                                SUM(p.amount)
+
+                            FROM payments p
+
+                            WHERE p.booking_id = rb.id
+
+                            AND p.status = 'verified'
+
+                        ),
+                        0
+                    ) AS total_paid,
+
+
+                    /* =====================================
+                       TOTAL PEMBAYARAN PENDING
+                       ===================================== */
+
+                    COALESCE(
+                        (
+                            SELECT
+                                SUM(p.amount)
+
+                            FROM payments p
+
+                            WHERE p.booking_id = rb.id
+
+                            AND p.status = 'pending'
+
+                        ),
+                        0
+                    ) AS total_pending,
+
+
                     rb.requested_start_date,
 
                     rb.notes,
@@ -1098,6 +1374,11 @@ const getMyBooking = async (req, res) => {
                     rb.rejection_reason,
 
                     rb.created_at,
+
+
+                    /* =====================================
+                       TENANT
+                       ===================================== */
 
                     t.name AS tenant_name,
 
@@ -1113,27 +1394,48 @@ const getMyBooking = async (req, res) => {
 
                     t.boarding_purpose,
 
+
+                    /* =====================================
+                       ROOM
+                       ===================================== */
+
                     r.room_number,
 
                     r.price AS room_price,
 
+
+                    /* =====================================
+                       BUILDING
+                       ===================================== */
+
                     b.name AS building_name,
+
+
+                    /* =====================================
+                       FLOOR
+                       ===================================== */
 
                     f.name AS floor_name
 
+
                 FROM room_bookings rb
+
 
                 INNER JOIN tenants t
                     ON rb.tenant_id = t.id
 
+
                 INNER JOIN rooms r
                     ON rb.room_id = r.id
+
 
                 LEFT JOIN buildings b
                     ON r.building_id = b.id
 
+
                 LEFT JOIN floors f
                     ON r.floor_id = f.id
+
 
                 WHERE rb.tenant_id = ?
 
@@ -1175,6 +1477,65 @@ const getMyBooking = async (req, res) => {
 
 
         // =================================================
+        // HITUNG NOMINAL
+        // =================================================
+
+        const bookingAmount =
+            Number(
+                booking.booking_amount
+            ) || 0;
+
+
+        const totalPaid =
+            Number(
+                booking.total_paid
+            ) || 0;
+
+
+        const totalPending =
+            Number(
+                booking.total_pending
+            ) || 0;
+
+
+        // =================================================
+        // HITUNG SISA PEMBAYARAN
+        // =================================================
+
+        const remainingPayment =
+            Math.max(
+                bookingAmount -
+                totalPaid,
+                0
+            );
+
+
+        // =================================================
+        // STATUS PEMBAYARAN
+        // =================================================
+
+        let paymentStatus =
+            "unpaid";
+
+
+        if (
+            remainingPayment <= 0
+        ) {
+
+            paymentStatus =
+                "paid";
+
+        } else if (
+            totalPending > 0
+        ) {
+
+            paymentStatus =
+                "pending";
+
+        }
+
+
+        // =================================================
         // RESPONSE
         // =================================================
 
@@ -1183,6 +1544,10 @@ const getMyBooking = async (req, res) => {
             success: true,
 
             data: {
+
+                // =========================================
+                // BOOKING
+                // =========================================
 
                 booking: {
 
@@ -1200,10 +1565,50 @@ const getMyBooking = async (req, res) => {
                             booking.booking_days
                         ),
 
+
+                    // =====================================
+                    // TOTAL BOOKING
+                    // =====================================
+
                     amount:
-                        Number(
-                            booking.booking_amount
-                        ),
+                        bookingAmount,
+
+
+                    // =====================================
+                    // TOTAL SUDAH DIBAYAR
+                    // =====================================
+
+                    total_paid:
+                        totalPaid,
+
+
+                    // =====================================
+                    // TOTAL PENDING
+                    // =====================================
+
+                    total_pending:
+                        totalPending,
+
+
+                    // =====================================
+                    // SISA PEMBAYARAN
+                    // =====================================
+
+                    remaining_payment:
+                        remainingPayment,
+
+
+                    // =====================================
+                    // STATUS PEMBAYARAN
+                    // =====================================
+
+                    payment_status:
+                        paymentStatus,
+
+
+                    // =====================================
+                    // DATA BOOKING
+                    // =====================================
 
                     requested_start_date:
                         booking.requested_start_date,
@@ -1221,6 +1626,11 @@ const getMyBooking = async (req, res) => {
                         booking.created_at
 
                 },
+
+
+                // =========================================
+                // TENANT
+                // =========================================
 
                 tenant: {
 
@@ -1249,6 +1659,11 @@ const getMyBooking = async (req, res) => {
                         booking.boarding_purpose
 
                 },
+
+
+                // =========================================
+                // ROOM
+                // =========================================
 
                 room: {
 

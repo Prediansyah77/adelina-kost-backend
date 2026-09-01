@@ -2000,6 +2000,8 @@ module.exports = {
 
     updateContract,
 
-    deleteContract
+    deleteContract,
+
+    createInitialBill
 
 };

@@ -725,6 +725,82 @@ const ensureBillsForPeriod = async (
 
 
             // =========================================
+            // BULAN PERTAMA KONTRAK
+            //
+            // PENTING:
+            //
+            // Jika periode tagihan sama dengan bulan
+            // kontrak dimulai DAN due date sama dengan
+            // tanggal mulai kontrak, maka bulan tersebut
+            // adalah bulan pertama yang sudah dibayar
+            // saat booking dilunasi.
+            //
+            // Contoh:
+            //
+            // start_date = 02-09-2026
+            //
+            // billing = 09/2026
+            //
+            // due_date = 02-09-2026
+            //
+            // Maka JANGAN buat tagihan September.
+            //
+            // Tagihan pertama akan dibuat:
+            //
+            // 10/2026
+            // due_date = 02-10-2026
+            // =========================================
+
+            const isFirstContractBillingPeriod =
+                Number(billingYear) ===
+                Number(
+                    startDate.slice(0, 4)
+                ) &&
+
+                Number(billingMonth) ===
+                Number(
+                    startDate.slice(5, 7)
+                ) &&
+
+                correctDueDate ===
+                startDate;
+
+
+            if (
+                isFirstContractBillingPeriod
+            ) {
+
+                skippedBills.push({
+
+                    contract_id:
+                        contract.id,
+
+                    tenant_name:
+                        contract.tenant_name,
+
+                    room_number:
+                        contract.room_number,
+
+                    billing_month:
+                        billingMonth,
+
+                    billing_year:
+                        billingYear,
+
+                    due_date:
+                        correctDueDate,
+
+                    reason:
+                        "Bulan pertama kontrak sudah dibayar saat pelunasan booking"
+
+                });
+
+                continue;
+
+            }
+
+
+            // =========================================
             // CEK TAGIHAN
             // =========================================
 
@@ -733,25 +809,29 @@ const ensureBillsForPeriod = async (
                     SELECT
                         b.id,
                         b.status,
- 
+
                         DATE_FORMAT(
                             b.due_date,
                             '%Y-%m-%d'
                         ) AS due_date
- 
+
                     FROM bills AS b
- 
+
                     WHERE b.contract_id = ?
- 
+
                     AND b.billing_month = ?
- 
+
                     AND b.billing_year = ?
- 
+
                     LIMIT 1
                 `, [
+
                     contract.id,
+
                     billingMonth,
+
                     billingYear
+
                 ]);
 
 
@@ -784,11 +864,18 @@ const ensureBillsForPeriod = async (
 
                     await db.query(`
                         UPDATE bills AS b
-                        SET b.due_date = ?
+
+                        SET
+                            b.due_date = ?
+
                         WHERE b.id = ?
+
                     `, [
+
                         correctDueDate,
+
                         existingBill.id
+
                     ]);
 
 
@@ -856,14 +943,21 @@ const ensureBillsForPeriod = async (
                         due_date,
                         status
                     )
- 
+
                     VALUES (?, ?, ?, ?, ?, 'unpaid')
+
                 `, [
+
                     contract.id,
+
                     billingMonth,
+
                     billingYear,
+
                     contract.monthly_price,
+
                     correctDueDate
+
                 ]);
 
 
@@ -909,9 +1003,9 @@ const ensureBillsForPeriod = async (
             );
 
 
-            // Kalau terjadi duplicate
-            // karena request bersamaan,
-            // jangan dianggap server error besar.
+            // =========================================
+            // DUPLICATE
+            // =========================================
 
             if (
                 error.code === "ER_DUP_ENTRY"
@@ -1326,10 +1420,8 @@ const getMyBills = async (
         // =============================================
         // UPDATE STATUS LATE
         //
-        // HANYA UNTUK PERIODE SISTEM
-        //
-        // Sistem mulai:
-        // Agustus 2026
+        // Hanya tagihan yang sudah masuk
+        // ke periode kontrak yang diproses.
         // =============================================
 
         const today =
@@ -1370,32 +1462,25 @@ const getMyBills = async (
                     AND b.billing_month <= ?
                 )
             )
+
+            AND NOT (
+                b.billing_year = YEAR(c.start_date)
+                AND b.billing_month = MONTH(c.start_date)
+                AND DATE(b.due_date) = DATE(c.start_date)
+            )
+
         `, [
 
             tenantId,
 
             today,
 
-            // ==============================
-            // BATAS AWAL SISTEM
-            // Agustus 2026
-            // ==============================
-
             SYSTEM_START_YEAR,
-
             SYSTEM_START_YEAR,
-
             SYSTEM_START_MONTH,
 
-            // ==============================
-            // BATAS AKHIR
-            // Bulan berjalan
-            // ==============================
-
             currentDate.year,
-
             currentDate.year,
-
             currentDate.month
 
         ]);
@@ -1404,92 +1489,106 @@ const getMyBills = async (
         // =============================================
         // AMBIL TAGIHAN TENANT
         //
-        // HANYA:
+        // Tagihan bulan pertama yang sudah dibayar
+        // ketika booking menjadi lunas tidak
+        // ditampilkan sebagai tagihan baru.
         //
-        // Agustus 2026
-        // sampai bulan berjalan
+        // Contoh:
         //
-        // Tagihan sebelum sistem dimulai
-        // TIDAK DITAMPILKAN.
+        // start_date = 02-09-2026
+        //
+        // September:
+        // due_date = 02-09-2026
+        // tidak ditampilkan.
+        //
+        // Oktober:
+        // due_date = 02-10-2026
+        // ditampilkan.
         // =============================================
 
         const [rows] =
             await db.query(`
-        SELECT
+                SELECT
 
-            b.id,
-            b.contract_id,
+                    b.id,
+                    b.contract_id,
 
-            c.tenant_id,
-            c.room_id,
+                    c.tenant_id,
+                    c.room_id,
 
-            t.name AS tenant_name,
+                    t.name AS tenant_name,
 
-            r.room_number,
+                    r.room_number,
 
-            b.billing_month,
-            b.billing_year,
-            b.amount,
+                    b.billing_month,
+                    b.billing_year,
+                    b.amount,
 
-            DATE_FORMAT(
-                b.due_date,
-                '%Y-%m-%d'
-            ) AS due_date,
+                    DATE_FORMAT(
+                        b.due_date,
+                        '%Y-%m-%d'
+                    ) AS due_date,
 
-            b.status AS bill_status,
+                    b.status AS bill_status,
 
-            b.created_at,
+                    b.created_at,
 
-            c.status AS contract_status,
+                    c.status AS contract_status,
 
-            DATE_FORMAT(
-                c.start_date,
-                '%Y-%m-%d'
-            ) AS contract_start_date,
+                    DATE_FORMAT(
+                        c.start_date,
+                        '%Y-%m-%d'
+                    ) AS contract_start_date,
 
-            DATE_FORMAT(
-                c.end_date,
-                '%Y-%m-%d'
-            ) AS contract_end_date
+                    DATE_FORMAT(
+                        c.end_date,
+                        '%Y-%m-%d'
+                    ) AS contract_end_date
 
-        FROM bills AS b
+                FROM bills AS b
 
-        INNER JOIN contracts AS c
-            ON b.contract_id = c.id
+                INNER JOIN contracts AS c
+                    ON b.contract_id = c.id
 
-        INNER JOIN tenants AS t
-            ON c.tenant_id = t.id
+                INNER JOIN tenants AS t
+                    ON c.tenant_id = t.id
 
-        INNER JOIN rooms AS r
-            ON c.room_id = r.id
+                INNER JOIN rooms AS r
+                    ON c.room_id = r.id
 
-        WHERE c.tenant_id = ?
+                WHERE c.tenant_id = ?
 
-        AND (
-            b.billing_year > ?
-            OR (
-                b.billing_year = ?
-                AND b.billing_month >= ?
-            )
-        )
+                AND NOT (
+                    b.billing_year = YEAR(c.start_date)
+                    AND b.billing_month = MONTH(c.start_date)
+                    AND DATE(b.due_date) = DATE(c.start_date)
+                )
 
-        AND (
-            b.billing_year < ?
-            OR (
-                b.billing_year = ?
-                AND b.billing_month <= ?
-            )
-        )
+                AND (
+                    b.billing_year > ?
+                    OR (
+                        b.billing_year = ?
+                        AND b.billing_month >= ?
+                    )
+                )
 
-        ORDER BY
+                AND (
+                    b.billing_year < ?
+                    OR (
+                        b.billing_year = ?
+                        AND b.billing_month <= ?
+                    )
+                )
 
-            b.billing_year DESC,
+                ORDER BY
 
-            b.billing_month DESC,
+                    b.billing_year DESC,
 
-            b.id DESC
+                    b.billing_month DESC,
 
-    `, [
+                    b.id DESC
+
+            `, [
 
                 tenantId,
 

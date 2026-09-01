@@ -360,10 +360,11 @@ const getDashboardSummary = async (req, res) => {
                     0
                 ) AS total_amount
 
-            FROM payments
+           FROM payments
 
-            WHERE MONTH(payment_date) = ?
-            AND YEAR(payment_date) = ?
+WHERE status = 'verified'
+AND MONTH(payment_date) = ?
+AND YEAR(payment_date) = ?
         `, [
             currentMonth,
             currentYear
