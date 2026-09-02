@@ -36,12 +36,6 @@ const getFinancialReport = async (req, res) => {
 
         // =================================================
         // NORMALISASI CUSTOM DATE
-        //
-        // Prioritas:
-        // startDate / endDate
-        //
-        // Jika tidak ada:
-        // start_date / end_date
         // =================================================
 
         const customStartDate =
@@ -92,10 +86,6 @@ const getFinancialReport = async (req, res) => {
 
         if (isCustomDate) {
 
-            // -------------------------------------------------
-            // VALIDASI FORMAT TANGGAL
-            // -------------------------------------------------
-
             const dateRegex =
                 /^\d{4}-\d{2}-\d{2}$/;
 
@@ -116,10 +106,6 @@ const getFinancialReport = async (req, res) => {
 
             }
 
-
-            // -------------------------------------------------
-            // VALIDASI TANGGAL
-            // -------------------------------------------------
 
             const startDateObject =
                 new Date(
@@ -154,10 +140,6 @@ const getFinancialReport = async (req, res) => {
             }
 
 
-            // -------------------------------------------------
-            // END DATE TIDAK BOLEH SEBELUM START DATE
-            // -------------------------------------------------
-
             if (
                 endDateObject < startDateObject
             ) {
@@ -190,10 +172,6 @@ const getFinancialReport = async (req, res) => {
                 Number(year);
 
 
-            // -------------------------------------------------
-            // VALIDASI MONTH
-            // -------------------------------------------------
-
             if (
                 !Number.isInteger(
                     monthNumber
@@ -213,10 +191,6 @@ const getFinancialReport = async (req, res) => {
 
             }
 
-
-            // -------------------------------------------------
-            // VALIDASI YEAR
-            // -------------------------------------------------
 
             if (
                 !Number.isInteger(
@@ -344,6 +318,18 @@ const getFinancialReport = async (req, res) => {
 
         // =================================================
         // PEMASUKAN
+        //
+        // ADA 2 JENIS PEMBAYARAN:
+        //
+        // 1. PEMBAYARAN TAGIHAN BIASA
+        //    p.bill_id -> bills
+        //
+        // 2. FULL PAYMENT BULAN PERTAMA
+        //    p.bill_id = NULL
+        //    p.booking_id -> room_bookings
+        //
+        // HANYA STATUS VERIFIED YANG DIANGGAP
+        // SEBAGAI PEMASUKAN.
         // =================================================
 
         const [payments] =
@@ -359,11 +345,19 @@ const getFinancialReport = async (req, res) => {
 
                     p.payment_method,
 
+                    p.status,
+
                     p.notes,
 
-                    b.billing_month,
+                    COALESCE(
+                        b.billing_month,
+                        NULL
+                    ) AS billing_month,
 
-                    b.billing_year,
+                    COALESCE(
+                        b.billing_year,
+                        NULL
+                    ) AS billing_year,
 
                     t.name AS tenant_name,
 
@@ -371,20 +365,31 @@ const getFinancialReport = async (req, res) => {
 
                 FROM payments p
 
-                INNER JOIN bills b
+                LEFT JOIN bills b
                     ON p.bill_id = b.id
 
-                INNER JOIN contracts c
+                LEFT JOIN contracts c
                     ON b.contract_id = c.id
 
+                LEFT JOIN room_bookings rb
+                    ON p.booking_id = rb.id
+
                 INNER JOIN tenants t
-                    ON c.tenant_id = t.id
+                    ON t.id = COALESCE(
+                        c.tenant_id,
+                        rb.tenant_id
+                    )
 
                 INNER JOIN rooms r
-                    ON c.room_id = r.id
+                    ON r.id = COALESCE(
+                        c.room_id,
+                        rb.room_id
+                    )
 
                 WHERE
                     ${paymentDateCondition}
+
+                AND p.status = 'verified'
 
                 ORDER BY
                     p.payment_date DESC,
@@ -558,7 +563,7 @@ const getFinancialReport = async (req, res) => {
         // RESPONSE
         // =================================================
 
-        res.json({
+        return res.json({
 
             success: true,
 
@@ -613,6 +618,9 @@ const getFinancialReport = async (req, res) => {
 
                             payment_method:
                                 payment.payment_method,
+
+                            status:
+                                payment.status,
 
                             notes:
                                 payment.notes,
@@ -700,7 +708,7 @@ const getFinancialReport = async (req, res) => {
         );
 
 
-        res.status(500).json({
+        return res.status(500).json({
 
             success: false,
 

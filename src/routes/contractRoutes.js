@@ -1,56 +1,82 @@
 const express = require("express");
 
 const {
-
     getContracts,
-
     getContractById,
-
     getContractHistory,
-
     createContract,
-
     updateContract,
-
-    deleteContract
-
+    deleteContract,
+    processMoveOut
 } = require("../controllers/contractController");
 
 const router = express.Router();
 
 
 // ============================================================
-// GET SEMUA KONTRAK
+// GET KONTRAK AKTIF
 // GET /api/contracts
 //
-// Menampilkan semua kontrak:
+// Menampilkan kontrak dengan status:
 // - active
-// - completed
-// - cancelled
+//
+// Kontrak completed/cancelled ada di history.
 // ============================================================
 
-router.get("/", getContracts);
+router.get(
+    "/",
+    getContracts
+);
 
 
 // ============================================================
 // GET RIWAYAT KONTRAK
 // GET /api/contracts/history
 //
-// Menampilkan kontrak yang sudah selesai / dibatalkan.
+// Menampilkan kontrak:
+// - completed
+// - cancelled
 //
 // PENTING:
 // Route ini harus berada SEBELUM /:id.
 // ============================================================
 
-router.get("/history", getContractHistory);
+router.get(
+    "/history",
+    getContractHistory
+);
+
+
+// ============================================================
+// PROSES PENGHUNI KELUAR
+// POST /api/contracts/:id/move-out
+//
+// Digunakan ketika penghuni keluar dari kos.
+//
+// Proses lengkap akan ditangani oleh:
+// processMoveOut
+// ============================================================
+
+router.post(
+    "/:id/move-out",
+    processMoveOut
+);
 
 
 // ============================================================
 // GET KONTRAK BERDASARKAN ID
 // GET /api/contracts/:id
+//
+// Bisa mengambil kontrak:
+// - active
+// - completed
+// - cancelled
 // ============================================================
 
-router.get("/:id", getContractById);
+router.get(
+    "/:id",
+    getContractById
+);
 
 
 // ============================================================
@@ -58,7 +84,10 @@ router.get("/:id", getContractById);
 // POST /api/contracts
 // ============================================================
 
-router.post("/", createContract);
+router.post(
+    "/",
+    createContract
+);
 
 
 // ============================================================
@@ -66,7 +95,10 @@ router.post("/", createContract);
 // PUT /api/contracts/:id
 // ============================================================
 
-router.put("/:id", updateContract);
+router.put(
+    "/:id",
+    updateContract
+);
 
 
 // ============================================================
@@ -74,7 +106,10 @@ router.put("/:id", updateContract);
 // DELETE /api/contracts/:id
 // ============================================================
 
-router.delete("/:id", deleteContract);
+router.delete(
+    "/:id",
+    deleteContract
+);
 
 
 // ============================================================

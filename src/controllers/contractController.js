@@ -277,18 +277,7 @@ const createInitialBill = async (
 // GET ACTIVE CONTRACTS
 // GET /api/contracts
 //
-// PENTING:
-//
-// Halaman Kontrak hanya menampilkan kontrak ACTIVE.
-//
-// Kontrak:
-// - completed
-// - cancelled
-//
-// tidak akan muncul di halaman ini.
-//
-// Data tetap berada di database dan dapat dilihat melalui:
-// GET /api/contracts/history
+// Hanya menampilkan kontrak ACTIVE.
 // ============================================================
 
 const getContracts = async (
@@ -382,11 +371,8 @@ const getContracts = async (
 // GET /api/contracts/history
 //
 // Menampilkan:
-//
-// completed
-// cancelled
-//
-// Kontrak TIDAK dihapus.
+// - completed
+// - cancelled
 // ============================================================
 
 const getContractHistory = async (
@@ -483,11 +469,6 @@ const getContractHistory = async (
 // ============================================================
 // GET CONTRACT BY ID
 // GET /api/contracts/:id
-//
-// Bisa mengambil kontrak:
-// active
-// completed
-// cancelled
 // ============================================================
 
 const getContractById = async (
@@ -1557,7 +1538,6 @@ const updateContract = async (
 
         // ====================================================
         // PASTIKAN TAGIHAN AWAL ADA
-        //
         // HANYA UNTUK ACTIVE
         // ====================================================
 
@@ -1714,6 +1694,367 @@ const updateContract = async (
 
             message:
                 "Gagal memperbarui kontrak",
+
+            error:
+                error.message
+
+        });
+
+    } finally {
+
+        connection.release();
+
+    }
+
+};
+
+
+// ============================================================
+// PROCESS MOVE OUT
+// POST /api/contracts/:id/move-out
+//
+// Proses penghuni keluar:
+//
+// 1. Kontrak active -> completed
+// 2. End date -> tanggal keluar
+// 3. Tenant aktif -> nonaktif
+// 4. Kamar -> available
+//
+// Kontrak TIDAK dihapus.
+// Kontrak tetap masuk ke riwayat.
+//
+// Catatan:
+// - moveOutReason
+// - roomCondition
+// - deposit
+//
+// belum disimpan di sini karena tabel contracts/tenants
+// yang ada sekarang belum memiliki kolom khusus untuk data tersebut.
+// ============================================================
+
+const processMoveOut = async (
+    req,
+    res
+) => {
+
+    const connection =
+        await db.getConnection();
+
+
+    try {
+
+        const { id } =
+            req.params;
+
+
+        const {
+            moveOutDate
+        } = req.body;
+
+
+        // ====================================================
+        // VALIDASI ID
+        // ====================================================
+
+        if (!id) {
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    "ID kontrak wajib diisi"
+
+            });
+
+        }
+
+
+        // ====================================================
+        // VALIDASI TANGGAL KELUAR
+        // ====================================================
+
+        const normalizedMoveOutDate =
+            normalizeDateOnly(
+                moveOutDate
+            );
+
+
+        if (!normalizedMoveOutDate) {
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    "Tanggal keluar wajib diisi dan harus valid"
+
+            });
+
+        }
+
+
+        // ====================================================
+        // START TRANSACTION
+        // ====================================================
+
+        await connection.beginTransaction();
+
+
+        // ====================================================
+        // LOCK CONTRACT
+        // ====================================================
+
+        const [contractRows] =
+            await connection.query(
+                `
+                SELECT
+                    c.id,
+                    c.tenant_id,
+                    c.room_id,
+                    c.start_date,
+                    c.end_date,
+                    c.monthly_price,
+                    c.status,
+
+                    t.name AS tenant_name,
+                    t.status AS tenant_status,
+
+                    r.room_number,
+                    r.status AS room_status
+
+                FROM contracts c
+
+                INNER JOIN tenants t
+                    ON t.id = c.tenant_id
+
+                INNER JOIN rooms r
+                    ON r.id = c.room_id
+
+                WHERE c.id = ?
+
+                LIMIT 1
+
+                FOR UPDATE
+                `,
+                [id]
+            );
+
+
+        // ====================================================
+        // CONTRACT TIDAK DITEMUKAN
+        // ====================================================
+
+        if (
+            contractRows.length === 0
+        ) {
+
+            await connection.rollback();
+
+            return res.status(404).json({
+
+                success: false,
+
+                message:
+                    "Kontrak tidak ditemukan"
+
+            });
+
+        }
+
+
+        const contract =
+            contractRows[0];
+
+
+        // ====================================================
+        // KONTRAK HARUS ACTIVE
+        // ====================================================
+
+        if (
+            contract.status !== "active"
+        ) {
+
+            await connection.rollback();
+
+            return res.status(409).json({
+
+                success: false,
+
+                message:
+                    "Kontrak ini sudah tidak aktif"
+
+            });
+
+        }
+
+
+        // ====================================================
+        // VALIDASI TANGGAL KELUAR
+        // TIDAK BOLEH SEBELUM TANGGAL MULAI
+        // ====================================================
+
+        const normalizedStartDate =
+            normalizeDateOnly(
+                contract.start_date
+            );
+
+
+        if (
+            normalizedStartDate &&
+            normalizedMoveOutDate <
+            normalizedStartDate
+        ) {
+
+            await connection.rollback();
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    "Tanggal keluar tidak boleh sebelum tanggal mulai kontrak"
+
+            });
+
+        }
+
+
+        // ====================================================
+        // UPDATE CONTRACT
+        // ====================================================
+
+        await connection.query(
+            `
+            UPDATE contracts
+            SET
+                end_date = ?,
+                status = 'completed'
+            WHERE id = ?
+              AND status = 'active'
+            `,
+            [
+                normalizedMoveOutDate,
+                id
+            ]
+        );
+
+
+        // ====================================================
+        // UPDATE TENANT
+        // ====================================================
+
+        await connection.query(
+            `
+            UPDATE tenants
+            SET
+                status = 'nonaktif'
+            WHERE id = ?
+              AND status = 'aktif'
+            `,
+            [
+                contract.tenant_id
+            ]
+        );
+
+
+        // ====================================================
+        // UPDATE ROOM
+        // ====================================================
+
+        await connection.query(
+            `
+            UPDATE rooms
+            SET
+                status = 'available'
+            WHERE id = ?
+            `,
+            [
+                contract.room_id
+            ]
+        );
+
+
+        // ====================================================
+        // COMMIT
+        // ====================================================
+
+        await connection.commit();
+
+
+        // ====================================================
+        // RESPONSE
+        // ====================================================
+
+        res.status(200).json({
+
+            success: true,
+
+            message:
+                "Penghuni berhasil diproses keluar. Kontrak diselesaikan, status penghuni menjadi nonaktif, dan kamar sekarang tersedia.",
+
+            data: {
+
+                contract_id:
+                    contract.id,
+
+                tenant_id:
+                    contract.tenant_id,
+
+                tenant_name:
+                    contract.tenant_name,
+
+                room_id:
+                    contract.room_id,
+
+                room_number:
+                    contract.room_number,
+
+                move_out_date:
+                    normalizedMoveOutDate,
+
+                contract_status:
+                    "completed",
+
+                tenant_status:
+                    "nonaktif",
+
+                room_status:
+                    "available"
+
+            }
+
+        });
+
+
+    } catch (error) {
+
+        try {
+
+            await connection.rollback();
+
+        } catch (rollbackError) {
+
+            console.error(
+                "Rollback Error:",
+                rollbackError
+            );
+
+        }
+
+
+        console.error(
+            "Process Move Out Error:",
+            error
+        );
+
+
+        res.status(500).json({
+
+            success: false,
+
+            message:
+                "Gagal memproses penghuni keluar",
 
             error:
                 error.message
@@ -1999,6 +2340,8 @@ module.exports = {
     createContract,
 
     updateContract,
+
+    processMoveOut,
 
     deleteContract,
 

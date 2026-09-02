@@ -3,6 +3,7 @@ const express = require("express");
 const {
     getBankAccounts,
     getBankAccountById,
+    getBankAccountMutations,
     createBankAccount,
     updateBankAccount,
     deleteBankAccount
@@ -19,6 +20,17 @@ const router = express.Router();
 router.get(
     "/",
     getBankAccounts
+);
+
+
+// =====================================================
+// GET MUTASI REKENING
+// GET /api/bank-accounts/:id/mutations
+// =====================================================
+
+router.get(
+    "/:id/mutations",
+    getBankAccountMutations
 );
 
 

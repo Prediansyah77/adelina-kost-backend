@@ -5,23 +5,49 @@ const {
     getPaymentById,
     createPayment,
     createTenantPayment,
+
+    // =====================================================
+    // BOOKING
+    // =====================================================
+
     createBookingPayment,
+    createInitialBookingPayment,
+    createRemainingBookingPayment,
+
+    // =====================================================
+    // FULL PAYMENT
+    // =====================================================
+
     createFullPayment,
+
+    // =====================================================
+    // VERIFY
+    // =====================================================
+
     verifyPayment,
     verifyBookingPayment,
     verifyFullPayment,
+
+    // =====================================================
+    // OTHER
+    // =====================================================
+
     rejectPayment,
     updatePayment,
     deletePayment,
     getPaymentSummary,
     getMyPayments
+
 } = require("../controllers/paymentController");
+
 
 const authenticateToken =
     require("../middleware/authMiddleware");
 
+
 const authorizeRole =
     require("../middleware/roleMiddleware");
+
 
 const uploadPaymentProof =
     require("../middleware/paymentUpload");
@@ -40,6 +66,12 @@ console.log(
 
         createBookingPayment:
             typeof createBookingPayment,
+
+        createInitialBookingPayment:
+            typeof createInitialBookingPayment,
+
+        createRemainingBookingPayment:
+            typeof createRemainingBookingPayment,
 
         createFullPayment:
             typeof createFullPayment,
@@ -124,14 +156,9 @@ router.get(
 //
 // GET /api/payments/summary
 //
-// CONTOH:
-//
-// /api/payments/summary?month=9&year=2026
-//
 // KHUSUS ADMIN
 //
-// PENTING:
-// Route ini harus berada sebelum /:id
+// Route harus sebelum /:id
 // ======================================================
 
 router.get(
@@ -153,10 +180,6 @@ router.get(
 // GET /api/payments/my-payments
 //
 // KHUSUS PENGHUNI
-//
-// Digunakan oleh:
-// TenantDashboard.jsx
-//
 // ======================================================
 
 router.get(
@@ -173,13 +196,13 @@ router.get(
 
 
 // ======================================================
-// CREATE PEMBAYARAN DARI PENGHUNI
+// CREATE PEMBAYARAN TAGIHAN
 //
 // POST /api/payments/tenant
 //
 // KHUSUS PENGHUNI
 //
-// Pembayaran tagihan biasa.
+// Pembayaran tagihan bulanan biasa.
 // ======================================================
 
 router.post(
@@ -200,26 +223,74 @@ router.post(
 
 
 // ======================================================
-// CREATE PEMBAYARAN BOOKING / DP
+// CREATE INITIAL BOOKING PAYMENT / DP
+//
+// POST /api/payments/booking-initial
+//
+// KHUSUS PENGHUNI
+//
+// Flow:
+//
+// pilih kamar
+//     ↓
+// halaman pembayaran DP
+//     ↓
+// upload bukti
+//     ↓
+// submit
+//     ↓
+// createInitialBookingPayment()
+//     ↓
+// room_bookings dibuat
+//     ↓
+// payments dibuat
+//     ↓
+// room available → booked
+//
+// PENTING:
+//
+// Booking BELUM dibuat ketika user hanya
+// membuka halaman pembayaran.
+//
+// Booking dibuat ketika DP benar-benar
+// disubmit.
+//
+// ======================================================
+
+router.post(
+
+    "/booking-initial",
+
+    authenticateToken,
+
+    authorizeRole("penghuni"),
+
+    uploadPaymentProof.single(
+        "proof_file"
+    ),
+
+    createInitialBookingPayment
+
+);
+
+
+// ======================================================
+// CREATE PEMBAYARAN BOOKING LAMA
 //
 // POST /api/payments/booking
 //
 // KHUSUS PENGHUNI
 //
-// Alur:
+// Function lama:
 //
-// pilih kamar
-//     ↓
-// pilih lama booking 1 - 7 hari
-//     ↓
-// upload bukti transfer
-//     ↓
-// kirim pembayaran
-//
-// Fungsi:
 // createBookingPayment()
 //
-// JANGAN DIGABUNG DENGAN FULL PAYMENT.
+// Route ini DIPERTAHANKAN agar function lama
+// tidak rusak.
+//
+// Digunakan untuk flow booking yang sudah
+// menggunakan booking_id.
+//
 // ======================================================
 
 router.post(
@@ -240,47 +311,88 @@ router.post(
 
 
 // ======================================================
-// CREATE PEMBAYARAN LUNAS
+// CREATE PEMBAYARAN SISA BOOKING
+//
+// POST /api/payments/booking-remaining
+//
+// KHUSUS PENGHUNI
+//
+// Flow:
+//
+// booking sudah approved
+//     ↓
+// DP sudah verified
+//     ↓
+// user bayar sisa
+//     ↓
+// createRemainingBookingPayment()
+//     ↓
+// payment baru dibuat
+//     ↓
+// status pending
+//     ↓
+// admin verifikasi
+//     ↓
+// verifyBookingPayment()
+//     ↓
+// jika total sudah lunas:
+// tenant → aktif
+// contract → active
+// room → occupied
+//
+// PENTING:
+//
+// Function ini TIDAK membuat booking baru.
+//
+// Menggunakan booking_id yang sudah ada.
+// ======================================================
+
+router.post(
+
+    "/booking-remaining",
+
+    authenticateToken,
+
+    authorizeRole("penghuni"),
+
+    uploadPaymentProof.single(
+        "proof_file"
+    ),
+
+    createRemainingBookingPayment
+
+);
+
+
+// ======================================================
+// CREATE PEMBAYARAN FULL
 //
 // POST /api/payments/full
 //
 // KHUSUS PENGHUNI
 //
-// Alur:
+// Flow:
 //
 // pilih kamar
 //     ↓
-// pilih "Pesan Kamar Tanpa DP"
+// bayar 1 bulan penuh
 //     ↓
-// pembayaran 1 bulan penuh
-//     ↓
-// upload bukti transfer
-//     ↓
-// submit
-//
-// Fungsi:
 // createFullPayment()
+//     ↓
+// booking pending
+//     ↓
+// payment pending
+//     ↓
+// room booked
+//     ↓
+// admin verifikasi
+//     ↓
+// tenant aktif
+//     ↓
+// contract active
+//     ↓
+// room occupied
 //
-// Status payment:
-// pending
-//
-// Status booking:
-// pending
-//
-// Status kamar:
-// available → booked
-//
-// Tenant:
-// tetap calon
-//
-// Kontrak:
-// BELUM dibuat
-//
-// Saldo bank:
-// BELUM bertambah
-//
-// Semua finalisasi dilakukan ketika
-// admin memverifikasi pembayaran.
 // ======================================================
 
 router.post(
@@ -301,14 +413,18 @@ router.post(
 
 
 // ======================================================
-// VERIFY PEMBAYARAN BOOKING
+// VERIFY PEMBAYARAN BOOKING / DP / SISA
 //
 // PATCH /api/payments/booking/:id/verify
 //
 // KHUSUS ADMIN
 //
-// Digunakan untuk pembayaran yang dibuat
-// melalui createBookingPayment().
+// Digunakan untuk:
+//
+// 1. DP booking
+// 2. pembayaran lanjutan
+// 3. pelunasan booking
+//
 // ======================================================
 
 router.patch(
@@ -331,28 +447,8 @@ router.patch(
 //
 // KHUSUS ADMIN
 //
-// Digunakan untuk pembayaran yang dibuat
-// melalui createFullPayment().
+// Digunakan untuk pembayaran full langsung.
 //
-// Alur:
-//
-// payment pending
-//     ↓
-// admin verifikasi
-//     ↓
-// payment verified
-//     ↓
-// booking approved
-//     ↓
-// tenant aktif
-//     ↓
-// contract active
-//     ↓
-// room occupied
-//     ↓
-// saldo bank bertambah
-//     ↓
-// bill bulan berikutnya dibuat
 // ======================================================
 
 router.patch(
@@ -369,7 +465,7 @@ router.patch(
 
 
 // ======================================================
-// VERIFY PEMBAYARAN TAGIHAN
+// VERIFY PEMBAYARAN TAGIHAN BIASA
 //
 // PATCH /api/payments/:id/verify
 //
@@ -417,8 +513,7 @@ router.patch(
 //
 // KHUSUS ADMIN
 //
-// PENTING:
-// Route ini setelah route khusus.
+// Route diletakkan setelah route-route khusus.
 // ======================================================
 
 router.get(
@@ -435,13 +530,11 @@ router.get(
 
 
 // ======================================================
-// CREATE PEMBAYARAN ADMIN
+// CREATE PEMBAYARAN MANUAL ADMIN
 //
 // POST /api/payments
 //
 // KHUSUS ADMIN
-//
-// Pembayaran manual/admin.
 // ======================================================
 
 router.post(

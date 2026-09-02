@@ -4319,6 +4319,1555 @@ const createBookingPayment = async (
 
 };
 
+const createRemainingBookingPayment = async (
+    req,
+    res
+) => {
+
+    let connection = null;
+
+    let uploadedFile = null;
+
+    try {
+
+        // ==================================================
+        // AUTHENTICATION
+        // ==================================================
+
+        if (!req.user) {
+
+            return res.status(401).json({
+
+                success: false,
+
+                message:
+                    "User belum terautentikasi"
+
+            });
+
+        }
+
+
+        // ==================================================
+        // TENANT ID DARI JWT
+        // ==================================================
+
+        const tenantId =
+            Number(
+                req.user.tenant_id
+            );
+
+
+        if (
+            !Number.isInteger(tenantId) ||
+            tenantId <= 0
+        ) {
+
+            return res.status(403).json({
+
+                success: false,
+
+                message:
+                    "Akun penghuni tidak memiliki tenant_id yang valid"
+
+            });
+
+        }
+
+
+        // ==================================================
+        // FILE BUKTI PEMBAYARAN
+        // ==================================================
+
+        uploadedFile =
+            req.file || null;
+
+
+        const proofFile =
+            req.file
+                ? req.file.filename
+                : null;
+
+
+        if (!proofFile) {
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    "Bukti pembayaran wajib diupload"
+
+            });
+
+        }
+
+
+        // ==================================================
+        // REQUEST DATA
+        // ==================================================
+
+        const {
+            booking_id
+        } = req.body;
+
+
+        // ==================================================
+        // VALIDASI BOOKING ID
+        // ==================================================
+
+        const bookingId =
+            Number(
+                booking_id
+            );
+
+
+        if (
+            !Number.isInteger(bookingId) ||
+            bookingId <= 0
+        ) {
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    "Booking ID tidak valid"
+
+            });
+
+        }
+
+
+        // ==================================================
+        // DATABASE CONNECTION
+        // ==================================================
+
+        connection =
+            await db.getConnection();
+
+
+        await connection.beginTransaction();
+
+
+        // ==================================================
+        // LOCK BOOKING
+        //
+        // Booking harus milik tenant yang login.
+        // ==================================================
+
+        const [bookingRows] =
+            await connection.query(`
+                SELECT
+
+                    rb.id,
+                    rb.tenant_id,
+                    rb.room_id,
+                    rb.booking_days,
+                    rb.booking_amount,
+                    rb.requested_start_date,
+                    rb.booking_expired_at,
+                    rb.status
+
+                FROM room_bookings rb
+
+                WHERE rb.id = ?
+
+                AND rb.tenant_id = ?
+
+                LIMIT 1
+
+                FOR UPDATE
+            `, [
+
+                bookingId,
+
+                tenantId
+
+            ]);
+
+
+        // ==================================================
+        // BOOKING TIDAK DITEMUKAN
+        // ==================================================
+
+        if (
+            bookingRows.length === 0
+        ) {
+
+            await connection.rollback();
+
+            return res.status(404).json({
+
+                success: false,
+
+                message:
+                    "Booking tidak ditemukan atau bukan milik Anda"
+
+            });
+
+        }
+
+
+        const booking =
+            bookingRows[0];
+
+
+        // ==================================================
+        // BOOKING HARUS APPROVED
+        //
+        // Pembayaran sisa hanya boleh dilakukan
+        // setelah DP/booking sebelumnya diverifikasi.
+        // ==================================================
+
+        if (
+            booking.status !== "approved"
+        ) {
+
+            await connection.rollback();
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    `Pembayaran sisa hanya dapat dilakukan untuk booking dengan status approved. Status saat ini: ${booking.status}`
+
+            });
+
+        }
+
+
+        // ==================================================
+        // LOCK ROOM
+        // ==================================================
+
+        const [roomRows] =
+            await connection.query(`
+                SELECT
+
+                    id,
+                    room_number,
+                    price,
+                    status
+
+                FROM rooms
+
+                WHERE id = ?
+
+                LIMIT 1
+
+                FOR UPDATE
+            `, [
+
+                booking.room_id
+
+            ]);
+
+
+        // ==================================================
+        // ROOM TIDAK DITEMUKAN
+        // ==================================================
+
+        if (
+            roomRows.length === 0
+        ) {
+
+            await connection.rollback();
+
+            return res.status(404).json({
+
+                success: false,
+
+                message:
+                    "Kamar booking tidak ditemukan"
+
+            });
+
+        }
+
+
+        const room =
+            roomRows[0];
+
+
+        // ==================================================
+        // KAMAR HARUS BOOKED
+        //
+        // Belum occupied karena tenant belum aktif.
+        // ==================================================
+
+        if (
+            room.status !== "booked"
+        ) {
+
+            await connection.rollback();
+
+            return res.status(409).json({
+
+                success: false,
+
+                message:
+                    `Status kamar tidak sesuai. Status saat ini: ${room.status}`
+
+            });
+
+        }
+
+
+        // ==================================================
+        // HARGA KAMAR
+        // ==================================================
+
+        const roomPrice =
+            Number(
+                room.price
+            );
+
+
+        if (
+            !Number.isFinite(roomPrice) ||
+            roomPrice <= 0
+        ) {
+
+            await connection.rollback();
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    "Harga kamar tidak valid"
+
+            });
+
+        }
+
+
+        // ==================================================
+        // HITUNG TOTAL PAYMENT YANG SUDAH VERIFIED
+        //
+        // Hanya payment verified yang dihitung.
+        //
+        // Contoh:
+        //
+        // Harga kamar = 750.000
+        //
+        // DP verified = 25.000
+        //
+        // Total verified = 25.000
+        // ==================================================
+
+        const [paidRows] =
+            await connection.query(`
+                SELECT
+
+                    COALESCE(
+                        SUM(amount),
+                        0
+                    ) AS total_paid
+
+                FROM payments
+
+                WHERE booking_id = ?
+
+                AND status = 'verified'
+
+            `, [
+
+                bookingId
+
+            ]);
+
+
+        const totalVerifiedPaid =
+            Number(
+                paidRows[0]?.total_paid || 0
+            );
+
+
+        // ==================================================
+        // VALIDASI TOTAL SUDAH DIBAYAR
+        // ==================================================
+
+        if (
+            totalVerifiedPaid >= roomPrice
+        ) {
+
+            await connection.rollback();
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    "Booking ini sudah lunas. Tidak ada sisa pembayaran."
+
+            });
+
+        }
+
+
+        // ==================================================
+        // HITUNG SISA PEMBAYARAN
+        // ==================================================
+
+        const remainingAmount =
+            Math.max(
+                roomPrice -
+                totalVerifiedPaid,
+                0
+            );
+
+
+        if (
+            remainingAmount <= 0
+        ) {
+
+            await connection.rollback();
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    "Tidak ada sisa pembayaran."
+
+            });
+
+        }
+
+
+        // ==================================================
+        // CEK PAYMENT PENDING
+        //
+        // Mencegah penghuni mengirim dua pembayaran
+        // sisa secara bersamaan.
+        // ==================================================
+
+        const [pendingPaymentRows] =
+            await connection.query(`
+                SELECT
+
+                    id,
+                    amount,
+                    status
+
+                FROM payments
+
+                WHERE booking_id = ?
+
+                AND status = 'pending'
+
+                LIMIT 1
+
+                FOR UPDATE
+
+            `, [
+
+                bookingId
+
+            ]);
+
+
+        if (
+            pendingPaymentRows.length > 0
+        ) {
+
+            await connection.rollback();
+
+            return res.status(409).json({
+
+                success: false,
+
+                message:
+                    "Booking ini sudah memiliki pembayaran yang sedang menunggu verifikasi"
+
+            });
+
+        }
+
+
+        // ==================================================
+        // CARI REKENING BCA ADELINA KOST
+        // ==================================================
+
+        const [bankRows] =
+            await connection.query(`
+                SELECT
+
+                    id,
+                    bank_name,
+                    account_number,
+                    account_name,
+                    is_active
+
+                FROM bank_accounts
+
+                WHERE bank_name = 'BCA'
+
+                AND account_number = '2200940604'
+
+                LIMIT 1
+
+                FOR UPDATE
+
+            `);
+
+
+        if (
+            bankRows.length === 0
+        ) {
+
+            await connection.rollback();
+
+            return res.status(404).json({
+
+                success: false,
+
+                message:
+                    "Rekening pembayaran BCA ADELINA KOST belum terdaftar di sistem"
+
+            });
+
+        }
+
+
+        const bankAccount =
+            bankRows[0];
+
+
+        // ==================================================
+        // REKENING HARUS AKTIF
+        // ==================================================
+
+        if (
+            Number(
+                bankAccount.is_active
+            ) !== 1
+        ) {
+
+            await connection.rollback();
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    "Rekening pembayaran BCA sedang tidak aktif"
+
+            });
+
+        }
+
+
+        // ==================================================
+        // INSERT PAYMENT SISA
+        //
+        // PENTING:
+        //
+        // booking_id = booking yang sama
+        //
+        // bill_id = NULL
+        //
+        // amount = sisa pembayaran
+        //
+        // status = pending
+        //
+        // Saldo bank BELUM bertambah.
+        // Baru bertambah saat admin verifikasi.
+        // ==================================================
+
+        const [paymentResult] =
+            await connection.query(`
+                INSERT INTO payments
+                (
+                    bill_id,
+                    booking_id,
+                    bank_account_id,
+                    payment_date,
+                    amount,
+                    payment_method,
+                    status,
+                    notes,
+                    proof_file
+                )
+
+                VALUES
+                (
+                    NULL,
+                    ?,
+                    ?,
+                    CURDATE(),
+                    ?,
+                    'transfer',
+                    'pending',
+                    ?,
+                    ?
+                )
+
+            `, [
+
+                bookingId,
+
+                bankAccount.id,
+
+                remainingAmount,
+
+                `Pelunasan sisa sewa kamar ${room.room_number}. Total sebelumnya terverifikasi ${totalVerifiedPaid}, sisa pembayaran ${remainingAmount}`,
+
+                proofFile
+
+            ]);
+
+
+        // ==================================================
+        // COMMIT
+        // ==================================================
+
+        await connection.commit();
+
+
+        // ==================================================
+        // RESPONSE
+        // ==================================================
+
+        return res.status(201).json({
+
+            success: true,
+
+            message:
+                "Pembayaran sisa sewa berhasil dikirim dan menunggu verifikasi admin",
+
+            data: {
+
+                payment_id:
+                    paymentResult.insertId,
+
+                booking_id:
+                    bookingId,
+
+                tenant_id:
+                    tenantId,
+
+                room_id:
+                    booking.room_id,
+
+                room_number:
+                    room.room_number,
+
+                room_price:
+                    roomPrice,
+
+                total_verified_paid:
+                    totalVerifiedPaid,
+
+                remaining_amount:
+                    remainingAmount,
+
+                payment_amount:
+                    remainingAmount,
+
+                payment_method:
+                    "transfer",
+
+                bank_account: {
+
+                    bank_name:
+                        bankAccount.bank_name,
+
+                    account_number:
+                        bankAccount.account_number,
+
+                    account_name:
+                        bankAccount.account_name
+
+                },
+
+                status:
+                    "pending",
+
+                proof_file:
+                    proofFile
+
+            }
+
+        });
+
+
+    } catch (error) {
+
+        // ==================================================
+        // ROLLBACK
+        // ==================================================
+
+        if (
+            connection
+        ) {
+
+            try {
+
+                await connection.rollback();
+
+            } catch (rollbackError) {
+
+                console.error(
+                    "Rollback Remaining Booking Payment Error:",
+                    rollbackError
+                );
+
+            }
+
+        }
+
+
+        // ==================================================
+        // HAPUS FILE JIKA DATABASE GAGAL
+        // ==================================================
+
+        if (
+            uploadedFile
+        ) {
+
+            try {
+
+                const fs =
+                    require("fs");
+
+                const path =
+                    require("path");
+
+
+                const filePath =
+                    path.join(
+                        __dirname,
+                        "../../uploads/payment-proofs",
+                        uploadedFile.filename
+                    );
+
+
+                if (
+                    fs.existsSync(filePath)
+                ) {
+
+                    fs.unlinkSync(
+                        filePath
+                    );
+
+                }
+
+            } catch (fileError) {
+
+                console.error(
+                    "Delete Remaining Payment Proof Error:",
+                    fileError
+                );
+
+            }
+
+        }
+
+
+        // ==================================================
+        // LOG ERROR
+        // ==================================================
+
+        console.error(
+            "Create Remaining Booking Payment Error:",
+            error
+        );
+
+
+        return res.status(500).json({
+
+            success: false,
+
+            message:
+                "Gagal mengirim pembayaran sisa sewa",
+
+            error:
+                error.message
+
+        });
+
+    } finally {
+
+        if (
+            connection
+        ) {
+
+            connection.release();
+
+        }
+
+    }
+
+};
+
+const createInitialBookingPayment = async (
+    req,
+    res
+) => {
+
+    let connection = null;
+    let uploadedFile = null;
+
+    try {
+
+        // ==================================================
+        // AUTHENTICATION
+        // ==================================================
+
+        if (!req.user) {
+
+            return res.status(401).json({
+                success: false,
+                message: "User belum terautentikasi"
+            });
+
+        }
+
+
+        // ==================================================
+        // TENANT ID DARI JWT
+        // ==================================================
+
+        const tenantId =
+            Number(req.user.tenant_id);
+
+
+        if (
+            !Number.isInteger(tenantId) ||
+            tenantId <= 0
+        ) {
+
+            return res.status(403).json({
+                success: false,
+                message:
+                    "Akun penghuni tidak memiliki tenant_id yang valid"
+            });
+
+        }
+
+
+        // ==================================================
+        // FILE BUKTI PEMBAYARAN
+        // ==================================================
+
+        uploadedFile =
+            req.file || null;
+
+        const proofFile =
+            req.file
+                ? req.file.filename
+                : null;
+
+
+        if (!proofFile) {
+
+            return res.status(400).json({
+                success: false,
+                message:
+                    "Bukti pembayaran wajib diupload"
+            });
+
+        }
+
+
+        // ==================================================
+        // REQUEST DATA
+        // ==================================================
+
+        const {
+            room_id,
+            booking_days,
+            amount
+        } = req.body;
+
+
+        // ==================================================
+        // VALIDASI ROOM ID
+        // ==================================================
+
+        const roomId =
+            Number(room_id);
+
+
+        if (
+            !Number.isInteger(roomId) ||
+            roomId <= 0
+        ) {
+
+            return res.status(400).json({
+                success: false,
+                message:
+                    "Room ID tidak valid"
+            });
+
+        }
+
+
+        // ==================================================
+        // VALIDASI BOOKING DAYS
+        // ==================================================
+
+        const bookingDays =
+            Number(booking_days);
+
+
+        if (
+            !Number.isInteger(bookingDays) ||
+            bookingDays < 1 ||
+            bookingDays > 7
+        ) {
+
+            return res.status(400).json({
+                success: false,
+                message:
+                    "Lama booking harus antara 1 sampai 7 hari"
+            });
+
+        }
+
+
+        // ==================================================
+        // VALIDASI AMOUNT
+        // ==================================================
+
+        const submittedAmount =
+            Number(amount);
+
+
+        if (
+            !Number.isFinite(submittedAmount) ||
+            submittedAmount <= 0
+        ) {
+
+            return res.status(400).json({
+                success: false,
+                message:
+                    "Nominal pembayaran tidak valid"
+            });
+
+        }
+
+
+        // ==================================================
+        // DATABASE
+        // ==================================================
+
+        connection =
+            await db.getConnection();
+
+        await connection.beginTransaction();
+
+
+        // ==================================================
+        // LOCK TENANT
+        // ==================================================
+
+        const [tenantRows] =
+            await connection.query(`
+                SELECT
+                    id,
+                    name,
+                    status
+                FROM tenants
+                WHERE id = ?
+                LIMIT 1
+                FOR UPDATE
+            `, [
+                tenantId
+            ]);
+
+
+        if (
+            tenantRows.length === 0
+        ) {
+
+            await connection.rollback();
+
+            return res.status(404).json({
+                success: false,
+                message:
+                    "Data penghuni tidak ditemukan"
+            });
+
+        }
+
+
+        const tenant =
+            tenantRows[0];
+
+
+        // ==================================================
+        // TENANT AKTIF TIDAK BOLEH BOOKING BARU
+        // ==================================================
+
+        if (
+            tenant.status === "aktif"
+        ) {
+
+            await connection.rollback();
+
+            return res.status(400).json({
+                success: false,
+                message:
+                    "Penghuni sudah aktif dan tidak dapat membuat booking baru"
+            });
+
+        }
+
+
+        // ==================================================
+        // CEK BOOKING TENANT YANG MASIH AKTIF
+        // ==================================================
+
+        const [tenantBookingRows] =
+            await connection.query(`
+                SELECT
+                    id,
+                    room_id,
+                    status
+                FROM room_bookings
+                WHERE tenant_id = ?
+                AND status IN (
+                    'pending',
+                    'approved'
+                )
+                LIMIT 1
+                FOR UPDATE
+            `, [
+                tenantId
+            ]);
+
+
+        if (
+            tenantBookingRows.length > 0
+        ) {
+
+            await connection.rollback();
+
+            return res.status(409).json({
+                success: false,
+                message:
+                    "Anda masih memiliki booking yang sedang diproses"
+            });
+
+        }
+
+
+        // ==================================================
+        // LOCK ROOM
+        // ==================================================
+
+        const [roomRows] =
+            await connection.query(`
+                SELECT
+                    id,
+                    room_number,
+                    price,
+                    status
+                FROM rooms
+                WHERE id = ?
+                LIMIT 1
+                FOR UPDATE
+            `, [
+                roomId
+            ]);
+
+
+        if (
+            roomRows.length === 0
+        ) {
+
+            await connection.rollback();
+
+            return res.status(404).json({
+                success: false,
+                message:
+                    "Kamar tidak ditemukan"
+            });
+
+        }
+
+
+        const room =
+            roomRows[0];
+
+
+        // ==================================================
+        // KAMAR HARUS AVAILABLE
+        // ==================================================
+
+        if (
+            room.status !== "available"
+        ) {
+
+            await connection.rollback();
+
+            return res.status(409).json({
+                success: false,
+                message:
+                    "Kamar sudah tidak tersedia"
+            });
+
+        }
+
+
+        // ==================================================
+        // CEK BOOKING LAIN PADA KAMAR
+        // ==================================================
+
+        const [otherBookingRows] =
+            await connection.query(`
+                SELECT
+                    id,
+                    tenant_id,
+                    status
+                FROM room_bookings
+                WHERE room_id = ?
+                AND status IN (
+                    'pending',
+                    'approved'
+                )
+                LIMIT 1
+                FOR UPDATE
+            `, [
+                roomId
+            ]);
+
+
+        if (
+            otherBookingRows.length > 0
+        ) {
+
+            await connection.rollback();
+
+            return res.status(409).json({
+                success: false,
+                message:
+                    "Kamar sedang dalam proses booking oleh calon penghuni lain"
+            });
+
+        }
+
+
+        // ==================================================
+        // VALIDASI HARGA KAMAR
+        // ==================================================
+
+        const roomPrice =
+            Number(room.price);
+
+
+        if (
+            !Number.isFinite(roomPrice) ||
+            roomPrice <= 0
+        ) {
+
+            await connection.rollback();
+
+            return res.status(400).json({
+                success: false,
+                message:
+                    "Harga kamar tidak valid"
+            });
+
+        }
+
+
+        // ==================================================
+        // HITUNG NOMINAL DP DI BACKEND
+        // ==================================================
+
+        const bookingAmount =
+            Math.round(
+                (roomPrice / 30) *
+                bookingDays
+            );
+
+
+        // ==================================================
+        // CEK NOMINAL DARI FRONTEND
+        // ==================================================
+
+        if (
+            submittedAmount !== bookingAmount
+        ) {
+
+            await connection.rollback();
+
+            return res.status(400).json({
+                success: false,
+                message:
+                    `Nominal pembayaran tidak sesuai. Seharusnya Rp${bookingAmount.toLocaleString("id-ID")}`
+            });
+
+        }
+
+
+        // ==================================================
+        // WAKTU EXPIRED BOOKING
+        // ==================================================
+
+        const bookingExpiredAt =
+            new Date(
+                Date.now() +
+                (
+                    bookingDays *
+                    24 *
+                    60 *
+                    60 *
+                    1000
+                )
+            );
+
+
+        // ==================================================
+        // REKENING BCA
+        // ==================================================
+
+        const [bankRows] =
+            await connection.query(`
+                SELECT
+                    id,
+                    bank_name,
+                    account_number,
+                    account_name,
+                    is_active
+                FROM bank_accounts
+                WHERE bank_name = 'BCA'
+                AND account_number = '2200940604'
+                LIMIT 1
+                FOR UPDATE
+            `);
+
+
+        if (
+            bankRows.length === 0
+        ) {
+
+            await connection.rollback();
+
+            return res.status(404).json({
+                success: false,
+                message:
+                    "Rekening pembayaran BCA ADELINA KOST belum terdaftar di sistem"
+            });
+
+        }
+
+
+        const bankAccount =
+            bankRows[0];
+
+
+        // ==================================================
+        // REKENING HARUS AKTIF
+        // ==================================================
+
+        if (
+            Number(bankAccount.is_active) !== 1
+        ) {
+
+            await connection.rollback();
+
+            return res.status(400).json({
+                success: false,
+                message:
+                    "Rekening pembayaran BCA sedang tidak aktif"
+            });
+
+        }
+
+
+        // ==================================================
+        // BUAT BOOKING BARU
+        //
+        // BOOKING BARU DIBUAT SAAT DP BENAR-BENAR DIKIRIM
+        // ==================================================
+
+        const [bookingResult] =
+            await connection.query(`
+                INSERT INTO room_bookings
+                (
+                    tenant_id,
+                    room_id,
+                    booking_days,
+                    booking_amount,
+                    requested_start_date,
+                    booking_expired_at,
+                    status
+                )
+                VALUES
+                (
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    CURDATE(),
+                    ?,
+                    'pending'
+                )
+            `, [
+
+                tenantId,
+                roomId,
+                bookingDays,
+                bookingAmount,
+                bookingExpiredAt
+
+            ]);
+
+
+        const bookingId =
+            bookingResult.insertId;
+
+
+        // ==================================================
+        // UPDATE ROOM
+        //
+        // available → booked
+        // ==================================================
+
+        const [roomUpdateResult] =
+            await connection.query(`
+                UPDATE rooms
+                SET status = 'booked'
+                WHERE id = ?
+                AND status = 'available'
+            `, [
+                roomId
+            ]);
+
+
+        if (
+            roomUpdateResult.affectedRows !== 1
+        ) {
+
+            throw new Error(
+                "Status kamar gagal diubah menjadi booked"
+            );
+
+        }
+
+
+        // ==================================================
+        // INSERT PAYMENT
+        //
+        // STATUS = PENDING
+        //
+        // SALDO BANK BELUM BERTAMBAH
+        // ==================================================
+
+        const [paymentResult] =
+            await connection.query(`
+                INSERT INTO payments
+                (
+                    bill_id,
+                    booking_id,
+                    bank_account_id,
+                    payment_date,
+                    amount,
+                    payment_method,
+                    status,
+                    notes,
+                    proof_file
+                )
+                VALUES
+                (
+                    NULL,
+                    ?,
+                    ?,
+                    CURDATE(),
+                    ?,
+                    'transfer',
+                    'pending',
+                    ?,
+                    ?
+                )
+            `, [
+
+                bookingId,
+                bankAccount.id,
+                bookingAmount,
+
+                `Pembayaran DP booking kamar ${room.room_number} selama ${bookingDays} hari`,
+
+                proofFile
+
+            ]);
+
+
+        // ==================================================
+        // COMMIT
+        // ==================================================
+
+        await connection.commit();
+
+
+        // ==================================================
+        // RESPONSE
+        // ==================================================
+
+        return res.status(201).json({
+
+            success: true,
+
+            message:
+                "Pembayaran DP berhasil dikirim dan booking berhasil dibuat. Menunggu verifikasi admin.",
+
+            data: {
+
+                payment_id:
+                    paymentResult.insertId,
+
+                booking_id:
+                    bookingId,
+
+                tenant_id:
+                    tenantId,
+
+                room_id:
+                    roomId,
+
+                room_number:
+                    room.room_number,
+
+                booking_days:
+                    bookingDays,
+
+                booking_amount:
+                    bookingAmount,
+
+                booking_expired_at:
+                    bookingExpiredAt,
+
+                status:
+                    "pending",
+
+                payment_method:
+                    "transfer",
+
+                proof_file:
+                    proofFile,
+
+                bank_account: {
+
+                    bank_name:
+                        bankAccount.bank_name,
+
+                    account_number:
+                        bankAccount.account_number,
+
+                    account_name:
+                        bankAccount.account_name
+
+                }
+
+            }
+
+        });
+
+
+    } catch (error) {
+
+        // ==================================================
+        // ROLLBACK
+        // ==================================================
+
+        if (connection) {
+
+            try {
+
+                await connection.rollback();
+
+            } catch (rollbackError) {
+
+                console.error(
+                    "Rollback Initial Booking Payment Error:",
+                    rollbackError
+                );
+
+            }
+
+        }
+
+
+        // ==================================================
+        // HAPUS FILE JIKA DATABASE GAGAL
+        // ==================================================
+
+        if (uploadedFile) {
+
+            try {
+
+                const fs =
+                    require("fs");
+
+                const path =
+                    require("path");
+
+                const filePath =
+                    path.join(
+                        __dirname,
+                        "../../uploads/payment-proofs",
+                        uploadedFile.filename
+                    );
+
+                if (
+                    fs.existsSync(filePath)
+                ) {
+
+                    fs.unlinkSync(
+                        filePath
+                    );
+
+                }
+
+            } catch (fileError) {
+
+                console.error(
+                    "Delete Initial Booking Proof Error:",
+                    fileError
+                );
+
+            }
+
+        }
+
+
+        console.error(
+            "Create Initial Booking Payment Error:",
+            error
+        );
+
+
+        return res.status(500).json({
+
+            success: false,
+
+            message:
+                "Gagal mengirim pembayaran DP",
+
+            error:
+                error.message
+
+        });
+
+    } finally {
+
+        if (connection) {
+
+            connection.release();
+
+        }
+
+    }
+
+};
+
 // =====================================================
 // CREATE FULL PAYMENT
 // =====================================================
@@ -5251,10 +6800,8 @@ const verifyBookingPayment = async (
             id
         } = req.params;
 
-
         const paymentId =
             Number(id);
-
 
         if (
             !Number.isInteger(paymentId) ||
@@ -5280,7 +6827,6 @@ const verifyBookingPayment = async (
         connection =
             await db.getConnection();
 
-
         await connection.beginTransaction();
 
 
@@ -5297,8 +6843,10 @@ const verifyBookingPayment = async (
                     p.bill_id,
                     p.bank_account_id,
 
-                    DATE(p.payment_date)
-                        AS payment_date,
+                    DATE_FORMAT(
+                        p.payment_date,
+                        '%Y-%m-%d'
+                    ) AS payment_date,
 
                     p.amount,
                     p.payment_method,
@@ -5419,7 +6967,6 @@ const verifyBookingPayment = async (
                 payment.amount
             );
 
-
         if (
             !Number.isFinite(paymentAmount) ||
             paymentAmount <= 0
@@ -5448,7 +6995,6 @@ const verifyBookingPayment = async (
                 payment.booking_amount
             );
 
-
         if (
             !Number.isFinite(bookingAmount) ||
             bookingAmount <= 0
@@ -5471,15 +7017,13 @@ const verifyBookingPayment = async (
         // =================================================
         // VALIDASI PAYMENT DATE
         //
-        // payment_date = tanggal pembayaran sebenarnya.
+        // DATE_FORMAT di query memastikan hasil:
         //
-        // Jika pembayaran pelunasan dilakukan:
+        // YYYY-MM-DD
         //
-        // 02-09-2026
+        // Contoh:
         //
-        // maka tanggal masuk kontrak:
-        //
-        // 02-09-2026
+        // 2026-09-02
         // =================================================
 
         const paymentDate =
@@ -5543,7 +7087,6 @@ const verifyBookingPayment = async (
                 payment.bank_account_id
             );
 
-
         if (
             !Number.isInteger(bankAccountId) ||
             bankAccountId <= 0
@@ -5572,7 +7115,6 @@ const verifyBookingPayment = async (
                 connection,
                 bankAccountId
             );
-
 
         if (
             !bankAccount
@@ -5699,7 +7241,6 @@ const verifyBookingPayment = async (
             Number(
                 room.price
             );
-
 
         if (
             !Number.isFinite(roomPrice) ||
@@ -5887,9 +7428,9 @@ const verifyBookingPayment = async (
         // =================================================
         // BELUM LUNAS
         //
-        // DP pertama:
+        // Contoh:
         //
-        // Rp25.000 / Rp750.000
+        // Rp23.333 / Rp700.000
         //
         // Hasil:
         //
@@ -6021,21 +7562,29 @@ const verifyBookingPayment = async (
 
 
         // =================================================
-        // =================================================
         // SUDAH LUNAS
-        // =================================================
         // =================================================
         //
         // Contoh:
         //
-        // 30-08-2026 → Rp25.000
-        // 02-09-2026 → Rp725.000
+        // DP:
+        // Rp25.000
         //
-        // TOTAL = Rp750.000
+        // Pelunasan:
+        // Rp725.000
+        //
+        // TOTAL:
+        // Rp750.000
         //
         // Maka:
         //
-        // tanggal masuk = 02-09-2026
+        // payment      → verified
+        // booking      → approved
+        // tenant       → aktif
+        // contract     → active
+        // room         → occupied
+        // bank balance → bertambah
+        // bill         → bulan berikutnya
         // =================================================
 
 
@@ -6120,10 +7669,7 @@ const verifyBookingPayment = async (
         // =================================================
         // TANGGAL MULAI KONTRAK
         //
-        // PENTING:
-        //
-        // Gunakan payment_date dari pembayaran
-        // yang membuat booking menjadi LUNAS.
+        // Menggunakan tanggal pembayaran pelunasan.
         //
         // Contoh:
         //
@@ -6133,10 +7679,8 @@ const verifyBookingPayment = async (
         // Pelunasan:
         // 02-09-2026
         //
-        // Maka:
-        //
-        // contract.start_date
-        // = 02-09-2026
+        // Contract:
+        // 02-09-2026
         // =================================================
 
         const contractStartDate =
@@ -6160,10 +7704,9 @@ const verifyBookingPayment = async (
         // =================================================
         // BUAT KONTRAK
         //
-        // Pembayaran full sudah dianggap sebagai
-        // pembayaran bulan pertama.
+        // Bulan pertama sudah dibayar penuh.
         //
-        // Jadi TIDAK membuat bill untuk bulan pertama.
+        // Jadi tidak membuat bill bulan pertama.
         // =================================================
 
         const [
@@ -6276,18 +7819,9 @@ const verifyBookingPayment = async (
         // =================================================
         // BOOKING
         //
-        // TIDAK DIUBAH MENJADI completed.
+        // Tetap approved.
         //
-        // Karena ENUM room_bookings:
-        //
-        // pending
-        // approved
-        // rejected
-        // cancelled
-        //
-        // Setelah lunas:
-        //
-        // booking tetap approved
+        // Tidak menggunakan completed.
         // =================================================
 
 
@@ -6296,17 +7830,11 @@ const verifyBookingPayment = async (
         //
         // Contoh:
         //
-        // start:
+        // Kontrak:
         // 02-09-2026
         //
-        // next:
+        // Tagihan berikutnya:
         // 02-10-2026
-        //
-        // Jika tanggal 31:
-        //
-        // 31-01 → 28/29-02
-        // 31-03 → 30-04
-        //
         // =================================================
 
         const [
@@ -6320,7 +7848,7 @@ const verifyBookingPayment = async (
 
 
         // =================================================
-        // HITUNG BULAN BERIKUTNYA
+        // BULAN BERIKUTNYA
         // =================================================
 
         let nextBillingYear =
@@ -6342,7 +7870,7 @@ const verifyBookingPayment = async (
 
 
         // =================================================
-        // JUMLAH HARI PADA BULAN BERIKUTNYA
+        // JUMLAH HARI BULAN BERIKUTNYA
         // =================================================
 
         const daysInNextMonth =
@@ -6357,17 +7885,6 @@ const verifyBookingPayment = async (
 
         // =================================================
         // TANGGAL JATUH TEMPO
-        //
-        // Mengikuti tanggal masuk.
-        //
-        // Contoh:
-        //
-        // masuk 02
-        // → jatuh tempo 02
-        //
-        // masuk 31
-        // → jika bulan berikutnya hanya 30 hari,
-        //   jatuh tempo menjadi 30.
         // =================================================
 
         const nextDueDay =
@@ -6388,11 +7905,7 @@ const verifyBookingPayment = async (
 
 
         // =================================================
-        // BUAT TAGIHAN BULAN BERIKUTNYA
-        //
-        // TIDAK menggunakan createInitialBill()
-        // supaya paymentController tidak bergantung
-        // kepada contractController.
+        // CEK BILL BULAN BERIKUTNYA
         // =================================================
 
         const [
@@ -6697,7 +8210,6 @@ const verifyFullPayment = async (
 
     let connection = null;
 
-
     try {
 
         // =================================================
@@ -6708,10 +8220,8 @@ const verifyFullPayment = async (
             id
         } = req.params;
 
-
         const paymentId =
             Number(id);
-
 
         if (
             !Number.isInteger(paymentId) ||
@@ -6737,7 +8247,6 @@ const verifyFullPayment = async (
         connection =
             await db.getConnection();
 
-
         await connection.beginTransaction();
 
 
@@ -6754,8 +8263,10 @@ const verifyFullPayment = async (
                     p.bill_id,
                     p.bank_account_id,
 
-                    DATE(p.payment_date)
-                        AS payment_date,
+                    DATE_FORMAT(
+                        p.payment_date,
+                        '%Y-%m-%d'
+                    ) AS payment_date,
 
                     p.amount,
                     p.payment_method,
@@ -6841,11 +8352,6 @@ const verifyFullPayment = async (
 
         // =================================================
         // BOOKING HARUS PENDING
-        //
-        // createFullPayment()
-        // selalu membuat booking baru:
-        //
-        // pending
         // =================================================
 
         if (
@@ -6875,7 +8381,6 @@ const verifyFullPayment = async (
                 payment.amount
             );
 
-
         if (
             !Number.isFinite(paymentAmount) ||
             paymentAmount <= 0
@@ -6898,6 +8403,9 @@ const verifyFullPayment = async (
         // =================================================
         // VALIDASI PAYMENT DATE
         // =================================================
+
+        // DATE_FORMAT() dari query di atas
+        // sudah menghasilkan YYYY-MM-DD
 
         const paymentDate =
             payment.payment_date
@@ -6960,7 +8468,6 @@ const verifyFullPayment = async (
                 payment.bank_account_id
             );
 
-
         if (
             !Number.isInteger(bankAccountId) ||
             bankAccountId <= 0
@@ -6989,7 +8496,6 @@ const verifyFullPayment = async (
                 connection,
                 bankAccountId
             );
-
 
         if (
             !bankAccount
@@ -7224,7 +8730,6 @@ const verifyFullPayment = async (
                 room.price
             );
 
-
         if (
             !Number.isFinite(roomPrice) ||
             roomPrice <= 0
@@ -7246,16 +8751,6 @@ const verifyFullPayment = async (
 
         // =================================================
         // FULL PAYMENT HARUS SAMA DENGAN HARGA KAMAR
-        //
-        // Contoh:
-        //
-        // Harga kamar = Rp750.000
-        // Full payment = Rp750.000
-        //
-        // Tidak boleh:
-        //
-        // Rp700.000
-        // Rp800.000
         // =================================================
 
         if (
@@ -7284,7 +8779,6 @@ const verifyFullPayment = async (
             Number(
                 payment.booking_amount
             );
-
 
         if (
             !Number.isFinite(bookingAmount) ||
@@ -7625,7 +9119,6 @@ const verifyFullPayment = async (
         let nextBillingYear =
             startYear;
 
-
         let nextBillingMonth =
             startMonth + 1;
 
@@ -7943,7 +9436,6 @@ const verifyFullPayment = async (
                 error.message
 
         });
-
 
     } finally {
 
@@ -8966,6 +10458,11 @@ const verifyPayment = async (
             error
         );
 
+        console.error(
+            "VERIFY PAYMENT RESPONSE:",
+            err.response?.data
+        );
+
 
         return res.status(500).json({
 
@@ -9419,6 +10916,10 @@ module.exports = {
 
     createFullPayment,
 
-    verifyFullPayment
+    verifyFullPayment,
+
+    createInitialBookingPayment,
+
+    createRemainingBookingPayment,
 
 };
