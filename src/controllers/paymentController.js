@@ -140,6 +140,8 @@ const normalizePaymentMethod = (
 };
 
 
+
+
 // ======================================================
 // HELPER:
 // VALIDASI REKENING BANK
@@ -851,6 +853,8 @@ const createPayment = async (
             normalizePaymentMethod(
                 payment_method
             );
+        console.log("[BOOKING INITIAL] payment_method:", payment_method);
+        console.log("[BOOKING INITIAL] normalizedMethod:", normalizedMethod);
 
 
         // ==================================================
@@ -5108,7 +5112,7 @@ const createInitialBookingPayment = async (
     req,
     res
 ) => {
-
+    console.log("🔥 CREATE INITIAL BOOKING PAYMENT TERPANGGIL");
     let connection = null;
     let uploadedFile = null;
 
@@ -5151,11 +5155,67 @@ const createInitialBookingPayment = async (
 
 
         // ==================================================
+        // REQUEST DATA
+        // ==================================================
+
+        const {
+            room_id,
+            booking_days,
+            amount,
+            payment_method
+        } = req.body;
+
+
+        // ==================================================
+        // PAYMENT METHOD
+        // ==================================================
+        //
+        // Yang diperbolehkan:
+        //
+        // transfer
+        // cash
+        //
+        // ==================================================
+
+        const selectedPaymentMethod =
+            String(
+                payment_method || "transfer"
+            )
+                .trim()
+                .toLowerCase();
+        console.log(
+            "🔥 payment_method:",
+            payment_method,
+            "| selectedPaymentMethod:",
+            selectedPaymentMethod
+        );
+
+
+        if (
+            ![
+                "transfer",
+                "cash"
+            ].includes(
+                selectedPaymentMethod
+            )
+        ) {
+
+            return res.status(400).json({
+                success: false,
+                message:
+                    "Metode pembayaran tidak valid"
+            });
+
+        }
+
+
+        // ==================================================
         // FILE BUKTI PEMBAYARAN
         // ==================================================
 
         uploadedFile =
             req.file || null;
+
 
         const proofFile =
             req.file
@@ -5163,26 +5223,38 @@ const createInitialBookingPayment = async (
                 : null;
 
 
-        if (!proofFile) {
+        // ==================================================
+        // VALIDASI BUKTI
+        //
+        // TRANSFER = WAJIB
+        // CASH     = TIDAK WAJIB
+        // ==================================================
+
+        if (
+            selectedPaymentMethod === "transfer" &&
+            !proofFile
+        ) {
 
             return res.status(400).json({
                 success: false,
                 message:
-                    "Bukti pembayaran wajib diupload"
+                    "Bukti pembayaran transfer wajib diupload"
             });
 
         }
 
 
         // ==================================================
-        // REQUEST DATA
+        // CASH TIDAK BOLEH MEMBAWA BUKTI TRANSFER
+        //
+        // Kalau suatu saat frontend mengirim file ketika
+        // memilih cash, kita abaikan file tersebut.
         // ==================================================
 
-        const {
-            room_id,
-            booking_days,
-            amount
-        } = req.body;
+        const finalProofFile =
+            selectedPaymentMethod === "transfer"
+                ? proofFile
+                : null;
 
 
         // ==================================================
@@ -5525,59 +5597,78 @@ const createInitialBookingPayment = async (
 
 
         // ==================================================
-        // REKENING BCA
+        // REKENING BANK
+        // ==================================================
+        //
+        // HANYA DICARI JIKA TRANSFER.
+        //
+        // CASH:
+        //
+        // bank_account_id = NULL
+        //
         // ==================================================
 
-        const [bankRows] =
-            await connection.query(`
-                SELECT
-                    id,
-                    bank_name,
-                    account_number,
-                    account_name,
-                    is_active
-                FROM bank_accounts
-                WHERE bank_name = 'BCA'
-                AND account_number = '2200940604'
-                LIMIT 1
-                FOR UPDATE
-            `);
+        let bankAccount = null;
 
 
         if (
-            bankRows.length === 0
+            selectedPaymentMethod === "transfer"
         ) {
 
-            await connection.rollback();
+            const [bankRows] =
+                await connection.query(`
+                    SELECT
+                        id,
+                        bank_name,
+                        account_number,
+                        account_name,
+                        is_active
+                    FROM bank_accounts
+                    WHERE bank_name = 'BCA'
+                    AND account_number = '2200940604'
+                    LIMIT 1
+                    FOR UPDATE
+                `);
 
-            return res.status(404).json({
-                success: false,
-                message:
-                    "Rekening pembayaran BCA ADELINA KOST belum terdaftar di sistem"
-            });
 
-        }
+            if (
+                bankRows.length === 0
+            ) {
+
+                await connection.rollback();
+
+                return res.status(404).json({
+                    success: false,
+                    message:
+                        "Rekening pembayaran BCA ADELINA KOST belum terdaftar di sistem"
+                });
+
+            }
 
 
-        const bankAccount =
-            bankRows[0];
+            bankAccount =
+                bankRows[0];
 
 
-        // ==================================================
-        // REKENING HARUS AKTIF
-        // ==================================================
+            // ==============================================
+            // REKENING HARUS AKTIF
+            // ==============================================
 
-        if (
-            Number(bankAccount.is_active) !== 1
-        ) {
+            if (
+                Number(
+                    bankAccount.is_active
+                ) !== 1
+            ) {
 
-            await connection.rollback();
+                await connection.rollback();
 
-            return res.status(400).json({
-                success: false,
-                message:
-                    "Rekening pembayaran BCA sedang tidak aktif"
-            });
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Rekening pembayaran BCA sedang tidak aktif"
+                });
+
+            }
 
         }
 
@@ -5585,7 +5676,7 @@ const createInitialBookingPayment = async (
         // ==================================================
         // BUAT BOOKING BARU
         //
-        // BOOKING BARU DIBUAT SAAT DP BENAR-BENAR DIKIRIM
+        // BOOKING DIBUAT SAAT PEMBAYARAN DI-SUBMIT
         // ==================================================
 
         const [bookingResult] =
@@ -5655,10 +5746,22 @@ const createInitialBookingPayment = async (
 
         // ==================================================
         // INSERT PAYMENT
+        // ==================================================
         //
-        // STATUS = PENDING
+        // TRANSFER:
+        //
+        // bank_account_id = ID BCA
+        // proof_file      = nama file
+        //
+        // CASH:
+        //
+        // bank_account_id = NULL
+        // proof_file      = NULL
+        //
+        // STATUS SELALU PENDING
         //
         // SALDO BANK BELUM BERTAMBAH
+        //
         // ==================================================
 
         const [paymentResult] =
@@ -5682,7 +5785,7 @@ const createInitialBookingPayment = async (
                     ?,
                     CURDATE(),
                     ?,
-                    'transfer',
+                    ?,
                     'pending',
                     ?,
                     ?
@@ -5690,12 +5793,20 @@ const createInitialBookingPayment = async (
             `, [
 
                 bookingId,
-                bankAccount.id,
+
+                bankAccount
+                    ? bankAccount.id
+                    : null,
+
                 bookingAmount,
 
-                `Pembayaran DP booking kamar ${room.room_number} selama ${bookingDays} hari`,
+                selectedPaymentMethod,
 
-                proofFile
+                selectedPaymentMethod === "cash"
+                    ? `Pembayaran DP booking kamar ${room.room_number} selama ${bookingDays} hari melalui cash/tunai`
+                    : `Pembayaran DP booking kamar ${room.room_number} selama ${bookingDays} hari melalui transfer`,
+
+                finalProofFile
 
             ]);
 
@@ -5716,7 +5827,9 @@ const createInitialBookingPayment = async (
             success: true,
 
             message:
-                "Pembayaran DP berhasil dikirim dan booking berhasil dibuat. Menunggu verifikasi admin.",
+                selectedPaymentMethod === "cash"
+                    ? "Pembayaran DP cash berhasil dicatat dan booking berhasil dibuat. Menunggu verifikasi admin."
+                    : "Pembayaran DP transfer berhasil dikirim dan booking berhasil dibuat. Menunggu verifikasi admin.",
 
             data: {
 
@@ -5748,23 +5861,24 @@ const createInitialBookingPayment = async (
                     "pending",
 
                 payment_method:
-                    "transfer",
+                    selectedPaymentMethod,
 
                 proof_file:
-                    proofFile,
+                    finalProofFile,
 
-                bank_account: {
+                bank_account:
+                    bankAccount
+                        ? {
+                            bank_name:
+                                bankAccount.bank_name,
 
-                    bank_name:
-                        bankAccount.bank_name,
+                            account_number:
+                                bankAccount.account_number,
 
-                    account_number:
-                        bankAccount.account_number,
-
-                    account_name:
-                        bankAccount.account_name
-
-                }
+                            account_name:
+                                bankAccount.account_name
+                        }
+                        : null
 
             }
 
@@ -5815,6 +5929,7 @@ const createInitialBookingPayment = async (
                         "../../uploads/payment-proofs",
                         uploadedFile.filename
                     );
+
 
                 if (
                     fs.existsSync(filePath)
@@ -6959,6 +7074,48 @@ const verifyBookingPayment = async (
 
 
         // =================================================
+        // PAYMENT METHOD
+        // =================================================
+        //
+        // Yang diperbolehkan:
+        //
+        // transfer
+        // cash
+        //
+        // =================================================
+
+        const paymentMethod =
+            String(
+                payment.payment_method || ""
+            )
+                .trim()
+                .toLowerCase();
+
+
+        if (
+            ![
+                "transfer",
+                "cash"
+            ].includes(
+                paymentMethod
+            )
+        ) {
+
+            await connection.rollback();
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    `Metode pembayaran ${payment.payment_method || "tidak diketahui"} tidak didukung`
+
+            });
+
+        }
+
+
+        // =================================================
         // VALIDASI PAYMENT AMOUNT
         // =================================================
 
@@ -7016,14 +7173,6 @@ const verifyBookingPayment = async (
 
         // =================================================
         // VALIDASI PAYMENT DATE
-        //
-        // DATE_FORMAT di query memastikan hasil:
-        //
-        // YYYY-MM-DD
-        //
-        // Contoh:
-        //
-        // 2026-09-02
         // =================================================
 
         const paymentDate =
@@ -7056,106 +7205,124 @@ const verifyBookingPayment = async (
 
 
         // =================================================
-        // VALIDASI TRANSFER
+        // BANK ACCOUNT
+        // =================================================
+        //
+        // TRANSFER:
+        // bank_account_id WAJIB
+        //
+        // CASH:
+        // bank_account_id BOLEH NULL
+        //
         // =================================================
 
+        let bankAccount = null;
+
+        let bankAccountId = null;
+
+
         if (
-            payment.payment_method !==
-            "transfer"
+            paymentMethod === "transfer"
         ) {
 
-            await connection.rollback();
+            // =============================================
+            // BANK ACCOUNT ID
+            // =============================================
 
-            return res.status(400).json({
+            bankAccountId =
+                Number(
+                    payment.bank_account_id
+                );
 
-                success: false,
 
-                message:
-                    "Pembayaran booking harus menggunakan metode transfer"
+            if (
+                !Number.isInteger(
+                    bankAccountId
+                ) ||
+                bankAccountId <= 0
+            ) {
 
-            });
+                await connection.rollback();
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Rekening bank pembayaran transfer tidak valid"
+
+                });
+
+            }
+
+
+            // =============================================
+            // LOCK BANK ACCOUNT
+            // =============================================
+
+            bankAccount =
+                await validateBankAccount(
+                    connection,
+                    bankAccountId
+                );
+
+
+            if (
+                !bankAccount
+            ) {
+
+                await connection.rollback();
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "Rekening bank pembayaran tidak ditemukan"
+
+                });
+
+            }
+
+
+            // =============================================
+            // REKENING HARUS AKTIF
+            // =============================================
+
+            if (
+                Number(
+                    bankAccount.is_active
+                ) !== 1
+            ) {
+
+                await connection.rollback();
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Rekening bank pembayaran tidak aktif"
+
+                });
+
+            }
 
         }
 
 
         // =================================================
-        // BANK ACCOUNT WAJIB
+        // CASH
         // =================================================
-
-        const bankAccountId =
-            Number(
-                payment.bank_account_id
-            );
-
-        if (
-            !Number.isInteger(bankAccountId) ||
-            bankAccountId <= 0
-        ) {
-
-            await connection.rollback();
-
-            return res.status(400).json({
-
-                success: false,
-
-                message:
-                    "Rekening bank pembayaran tidak valid"
-
-            });
-
-        }
-
-
+        //
+        // Kalau cash:
+        //
+        // bankAccount     = null
+        // bankAccountId   = null
+        //
+        // Tidak perlu validasi rekening.
+        //
         // =================================================
-        // LOCK BANK ACCOUNT
-        // =================================================
-
-        const bankAccount =
-            await validateBankAccount(
-                connection,
-                bankAccountId
-            );
-
-        if (
-            !bankAccount
-        ) {
-
-            await connection.rollback();
-
-            return res.status(404).json({
-
-                success: false,
-
-                message:
-                    "Rekening bank pembayaran tidak ditemukan"
-
-            });
-
-        }
-
-
-        // =================================================
-        // REKENING HARUS AKTIF
-        // =================================================
-
-        if (
-            Number(
-                bankAccount.is_active
-            ) !== 1
-        ) {
-
-            await connection.rollback();
-
-            return res.status(400).json({
-
-                success: false,
-
-                message:
-                    "Rekening bank pembayaran tidak aktif"
-
-            });
-
-        }
 
 
         // =================================================
@@ -7388,39 +7555,49 @@ const verifyBookingPayment = async (
 
         // =================================================
         // TAMBAH SALDO BANK
+        //
+        // HANYA TRANSFER
+        //
+        // CASH TIDAK MENAMBAH SALDO BANK
         // =================================================
 
-        const [
-            balanceResult
-        ] =
-            await connection.query(`
-                UPDATE bank_accounts
-
-                SET
-                    current_balance =
-                        COALESCE(
-                            current_balance,
-                            0
-                        ) + ?
-
-                WHERE id = ?
-
-            `, [
-
-                paymentAmount,
-
-                bankAccountId
-
-            ]);
-
-
         if (
-            balanceResult.affectedRows !== 1
+            paymentMethod === "transfer"
         ) {
 
-            throw new Error(
-                "Saldo rekening bank gagal diperbarui"
-            );
+            const [
+                balanceResult
+            ] =
+                await connection.query(`
+                    UPDATE bank_accounts
+
+                    SET
+                        current_balance =
+                            COALESCE(
+                                current_balance,
+                                0
+                            ) + ?
+
+                    WHERE id = ?
+
+                `, [
+
+                    paymentAmount,
+
+                    bankAccountId
+
+                ]);
+
+
+            if (
+                balanceResult.affectedRows !== 1
+            ) {
+
+                throw new Error(
+                    "Saldo rekening bank gagal diperbarui"
+                );
+
+            }
 
         }
 
@@ -7430,7 +7607,8 @@ const verifyBookingPayment = async (
         //
         // Contoh:
         //
-        // Rp23.333 / Rp700.000
+        // DP Cash:
+        // Rp25.000
         //
         // Hasil:
         //
@@ -7439,6 +7617,9 @@ const verifyBookingPayment = async (
         // tenant   → calon
         // room     → booked
         // contract → belum ada
+        //
+        // SALDO BANK:
+        // TIDAK BERUBAH JIKA CASH
         // =================================================
 
         if (
@@ -7499,7 +7680,9 @@ const verifyBookingPayment = async (
                 success: true,
 
                 message:
-                    "Pembayaran booking berhasil diverifikasi. Booking disetujui dan kamar tetap dibooking.",
+                    paymentMethod === "cash"
+                        ? "Pembayaran booking cash berhasil diverifikasi. Booking disetujui dan kamar tetap dibooking."
+                        : "Pembayaran booking transfer berhasil diverifikasi. Booking disetujui dan kamar tetap dibooking.",
 
                 data: {
 
@@ -7520,6 +7703,9 @@ const verifyBookingPayment = async (
 
                     payment_date:
                         paymentDate,
+
+                    payment_method:
+                        paymentMethod,
 
                     payment_amount:
                         paymentAmount,
@@ -7552,7 +7738,21 @@ const verifyBookingPayment = async (
                         "calon",
 
                     contract_status:
-                        "belum_ada"
+                        "belum_ada",
+
+                    bank_account:
+                        bankAccount
+                            ? {
+                                bank_name:
+                                    bankAccount.bank_name,
+
+                                account_number:
+                                    bankAccount.account_number,
+
+                                account_name:
+                                    bankAccount.account_name
+                            }
+                            : null
 
                 }
 
@@ -7567,10 +7767,10 @@ const verifyBookingPayment = async (
         //
         // Contoh:
         //
-        // DP:
+        // DP Cash:
         // Rp25.000
         //
-        // Pelunasan:
+        // Pelunasan Cash:
         // Rp725.000
         //
         // TOTAL:
@@ -7583,8 +7783,13 @@ const verifyBookingPayment = async (
         // tenant       → aktif
         // contract     → active
         // room         → occupied
-        // bank balance → bertambah
-        // bill         → bulan berikutnya
+        //
+        // CASH:
+        // saldo bank tidak berubah
+        //
+        // TRANSFER:
+        // saldo bank bertambah
+        //
         // =================================================
 
 
@@ -7670,17 +7875,6 @@ const verifyBookingPayment = async (
         // TANGGAL MULAI KONTRAK
         //
         // Menggunakan tanggal pembayaran pelunasan.
-        //
-        // Contoh:
-        //
-        // DP:
-        // 30-08-2026
-        //
-        // Pelunasan:
-        // 02-09-2026
-        //
-        // Contract:
-        // 02-09-2026
         // =================================================
 
         const contractStartDate =
@@ -7706,7 +7900,7 @@ const verifyBookingPayment = async (
         //
         // Bulan pertama sudah dibayar penuh.
         //
-        // Jadi tidak membuat bill bulan pertama.
+        // Tidak membuat bill bulan pertama.
         // =================================================
 
         const [
@@ -7827,14 +8021,6 @@ const verifyBookingPayment = async (
 
         // =================================================
         // HITUNG TAGIHAN BERIKUTNYA
-        //
-        // Contoh:
-        //
-        // Kontrak:
-        // 02-09-2026
-        //
-        // Tagihan berikutnya:
-        // 02-10-2026
         // =================================================
 
         const [
@@ -8050,7 +8236,9 @@ const verifyBookingPayment = async (
             success: true,
 
             message:
-                "Pembayaran berhasil diverifikasi dan lunas. Penghuni diaktifkan, kontrak dibuat mulai tanggal pelunasan, kamar menjadi terisi, dan tagihan berikutnya dibuat.",
+                paymentMethod === "cash"
+                    ? "Pembayaran cash berhasil diverifikasi dan lunas. Penghuni diaktifkan, kontrak dibuat mulai tanggal pelunasan, kamar menjadi terisi, dan tagihan berikutnya dibuat."
+                    : "Pembayaran transfer berhasil diverifikasi dan lunas. Penghuni diaktifkan, kontrak dibuat mulai tanggal pelunasan, kamar menjadi terisi, dan tagihan berikutnya dibuat.",
 
             data: {
 
@@ -8074,6 +8262,9 @@ const verifyBookingPayment = async (
 
                 payment_date:
                     paymentDate,
+
+                payment_method:
+                    paymentMethod,
 
                 contract_start_date:
                     contractStartDate,
@@ -8111,18 +8302,19 @@ const verifyBookingPayment = async (
                 contract_status:
                     "active",
 
-                bank_account: {
+                bank_account:
+                    bankAccount
+                        ? {
+                            bank_name:
+                                bankAccount.bank_name,
 
-                    bank_name:
-                        bankAccount.bank_name,
+                            account_number:
+                                bankAccount.account_number,
 
-                    account_number:
-                        bankAccount.account_number,
-
-                    account_name:
-                        bankAccount.account_name
-
-                },
+                            account_name:
+                                bankAccount.account_name
+                        }
+                        : null,
 
                 next_bill:
                     nextBill
@@ -10518,13 +10710,11 @@ const rejectPayment = async (
 
     let connection = null;
 
-
     try {
 
         const {
             id
         } = req.params;
-
 
         const paymentId =
             Number(id);
@@ -10613,7 +10803,9 @@ const rejectPayment = async (
         // ==================================================
 
         if (
-            payment.status !== "pending"
+            String(payment.status || "")
+                .trim()
+                .toLowerCase() !== "pending"
         ) {
 
             await connection.rollback();
@@ -10631,54 +10823,7 @@ const rejectPayment = async (
 
 
         // ==================================================
-        // BILL HARUS ADA
-        // ==================================================
-
-        const billId =
-            Number(
-                payment.bill_id
-            );
-
-
-        const [billRows] =
-            await connection.query(`
-                SELECT
-                    *
-                FROM bills
-
-                WHERE id = ?
-
-                LIMIT 1
-
-                FOR UPDATE
-            `, [
-                billId
-            ]);
-
-
-        if (
-            billRows.length === 0
-        ) {
-
-            await connection.rollback();
-
-            return res.status(404).json({
-
-                success: false,
-
-                message:
-                    "Tagihan pembayaran tidak ditemukan"
-
-            });
-
-        }
-
-
-        // ==================================================
         // CATAT ALASAN PENOLAKAN
-        //
-        // notes lama tetap dipertahankan jika
-        // admin tidak mengirim alasan.
         // ==================================================
 
         const {
@@ -10697,83 +10842,262 @@ const rejectPayment = async (
 
 
         // ==================================================
-        // UPDATE PAYMENT
-        //
-        // pending → rejected
+        // CEK APAKAH PEMBAYARAN BERHUBUNGAN
+        // DENGAN BOOKING
         // ==================================================
 
-        await connection.query(`
-            UPDATE payments
+        const bookingId =
+            payment.booking_id
+                ? Number(payment.booking_id)
+                : null;
 
-            SET
-                status = 'rejected',
-                notes = ?
 
-            WHERE id = ?
-        `, [
-
-            rejectionNotes,
-
-            paymentId
-
-        ]);
-
-        // =================================================
-        // UPDATE STATUS ROOM
-        // =================================================
+        // ==================================================
+        // BOOKING PAYMENT
         //
-        // Setelah pembayaran booking diverifikasi,
-        // kamar dipastikan berstatus booked.
-        //
+        // DP / FULL / SISA
+        // ==================================================
 
         if (
-            room.status !== "booked"
+            Number.isInteger(bookingId) &&
+            bookingId > 0
         ) {
 
-            const [roomUpdateResult] =
+            // ==============================================
+            // LOCK BOOKING
+            // ==============================================
+
+            const [bookingRows] =
                 await connection.query(`
-            UPDATE rooms
+                    SELECT
+                        *
+                    FROM room_bookings
 
-            SET
-                status = 'booked'
+                    WHERE id = ?
 
-            WHERE id = ?
+                    LIMIT 1
 
-        `, [
-
-                    payment.room_id
-
+                    FOR UPDATE
+                `, [
+                    bookingId
                 ]);
 
 
             if (
-                roomUpdateResult.affectedRows !== 1
+                bookingRows.length === 0
             ) {
 
-                throw new Error(
-                    "Status kamar gagal diubah menjadi booked"
-                );
+                await connection.rollback();
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "Data booking tidak ditemukan"
+
+                });
 
             }
+
+
+            const booking =
+                bookingRows[0];
+
+
+            // ==============================================
+            // UPDATE PAYMENT
+            //
+            // pending → rejected
+            // ==============================================
+
+            await connection.query(`
+                UPDATE payments
+
+                SET
+                    status = 'rejected',
+                    notes = ?
+
+                WHERE id = ?
+            `, [
+
+                rejectionNotes,
+
+                paymentId
+
+            ]);
+
+
+            // ==============================================
+            // JIKA BOOKING MASIH PENDING
+            //
+            // Artinya pembayaran awal / full payment
+            // yang membuat booking belum disetujui.
+            //
+            // Kalau ditolak:
+            //
+            // booking → rejected
+            // room → available
+            // ==============================================
+
+            if (
+                String(booking.status || "")
+                    .trim()
+                    .toLowerCase() === "pending"
+            ) {
+
+                await connection.query(`
+                    UPDATE room_bookings
+
+                    SET
+                        status = 'rejected'
+
+                    WHERE id = ?
+                `, [
+
+                    bookingId
+
+                ]);
+
+
+                await connection.query(`
+                    UPDATE rooms
+
+                    SET
+                        status = 'available'
+
+                    WHERE id = ?
+                `, [
+
+                    booking.room_id
+
+                ]);
+
+            }
+
+
+            // ==============================================
+            // JIKA BOOKING SUDAH APPROVED
+            //
+            // Artinya:
+            //
+            // DP sudah disetujui
+            // booking tetap berjalan
+            //
+            // Jika pembayaran sisa ditolak:
+            //
+            // booking tetap approved
+            // room tetap booked
+            // ==============================================
+
+
+        } else {
+
+            // =================================================
+            // PEMBAYARAN TAGIHAN BIASA
+            // =================================================
+            //
+            // Untuk pembayaran bill:
+            // bill_id memang harus ada.
+            // =================================================
+
+            const billId =
+                payment.bill_id
+                    ? Number(payment.bill_id)
+                    : null;
+
+
+            if (
+                !Number.isInteger(billId) ||
+                billId <= 0
+            ) {
+
+                await connection.rollback();
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "Tagihan pembayaran tidak ditemukan"
+
+                });
+
+            }
+
+
+            // ==============================================
+            // LOCK BILL
+            // ==============================================
+
+            const [billRows] =
+                await connection.query(`
+                    SELECT
+                        *
+                    FROM bills
+
+                    WHERE id = ?
+
+                    LIMIT 1
+
+                    FOR UPDATE
+                `, [
+                    billId
+                ]);
+
+
+            if (
+                billRows.length === 0
+            ) {
+
+                await connection.rollback();
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "Tagihan pembayaran tidak ditemukan"
+
+                });
+
+            }
+
+
+            // ==============================================
+            // UPDATE PAYMENT
+            //
+            // pending → rejected
+            // ==============================================
+
+            await connection.query(`
+                UPDATE payments
+
+                SET
+                    status = 'rejected',
+                    notes = ?
+
+                WHERE id = ?
+            `, [
+
+                rejectionNotes,
+
+                paymentId
+
+            ]);
 
         }
 
 
         // ==================================================
-        // JANGAN UPDATE SALDO BANK
+        // PENTING
         //
-        // JANGAN:
+        // PEMBAYARAN DITOLAK:
         //
-        // UPDATE bank_accounts
+        // ❌ saldo bank tidak bertambah
+        // ❌ bill tidak menjadi paid
+        // ❌ income tidak bertambah
         //
-        // Karena pembayaran ditolak.
-        // ==================================================
-
-
-        // ==================================================
-        // JANGAN UPDATE BILL KE PAID
-        //
-        // Bill tetap unpaid.
         // ==================================================
 
 
@@ -10810,16 +11134,17 @@ const rejectPayment = async (
                 "Pembayaran berhasil ditolak",
 
             data:
-                rows[0],
+                rows[0] || null,
 
             bill_status:
-                "unpaid"
+                payment.bill_id
+                    ? "unpaid"
+                    : null
 
         });
 
 
     } catch (error) {
-
 
         // ==================================================
         // ROLLBACK
@@ -10865,7 +11190,6 @@ const rejectPayment = async (
 
 
     } finally {
-
 
         if (
             connection
