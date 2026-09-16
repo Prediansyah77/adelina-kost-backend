@@ -1,8 +1,6 @@
 const db = require("../config/database");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
-const path = require("path");
-const fs = require("fs");
 
 
 // ==========================================
@@ -45,17 +43,15 @@ const login = async (req, res) => {
         // CARI USER + STATUS TENANT
         // ======================================
         //
-        // PENTING:
+        // User penghuni bisa:
         //
-        // User penghuni bisa memiliki tenant
-        // dengan status:
+        // 1. Belum memiliki tenant
+        //    tenant_id = NULL
         //
-        // calon
-        // aktif
-        // nonaktif
-        //
-        // Jadi kita harus mengambil
-        // tenants.status saat login.
+        // 2. Memiliki tenant dengan status:
+        //    calon
+        //    aktif
+        //    nonaktif
         //
         // ======================================
 
@@ -117,6 +113,12 @@ const login = async (req, res) => {
         const user =
             users[0];
 
+        console.log("========== LOGIN DEBUG ==========");
+        console.log("USER DARI DATABASE:", user);
+        console.log("TENANT ID:", user.tenant_id);
+        console.log("TENANT STATUS:", user.tenant_status);
+        console.log("=================================");
+
 
         // ======================================
         // CEK PASSWORD
@@ -148,17 +150,6 @@ const login = async (req, res) => {
 
         // ======================================
         // TENANT STATUS
-        // ======================================
-        //
-        // Kalau user adalah penghuni tetapi
-        // belum memiliki tenant, nilainya null.
-        //
-        // Kalau sudah terhubung:
-        //
-        // calon
-        // aktif
-        // nonaktif
-        //
         // ======================================
 
         const tenantStatus =
@@ -275,6 +266,25 @@ const login = async (req, res) => {
 // REGISTER PENGHUNI
 // POST /api/auth/register
 // ==========================================
+//
+// ALUR BARU:
+//
+// Register hanya membuat:
+//
+// - username
+// - password
+// - role
+//
+// Belum membuat tenant.
+//
+// tenant_id = NULL
+//
+// Setelah login:
+//
+// user diarahkan ke halaman
+// Lengkapi Biodata.
+//
+// ==========================================
 
 const register = async (req, res) => {
 
@@ -288,20 +298,6 @@ const register = async (req, res) => {
 
         const {
 
-            name,
-
-            phone,
-
-            gender,
-
-            occupation,
-
-            address,
-
-            identityNumber,
-
-            boardingPurpose,
-
             username,
 
             password,
@@ -312,25 +308,10 @@ const register = async (req, res) => {
 
 
         // ======================================
-        // FILE KTP
-        // ======================================
-
-        const ktpFile =
-            req.file || null;
-
-
-        // ======================================
-        // VALIDASI FIELD WAJIB
+        // VALIDASI DATA WAJIB
         // ======================================
 
         if (
-            !name ||
-            !phone ||
-            !gender ||
-            !occupation ||
-            !address ||
-            !identityNumber ||
-            !boardingPurpose ||
             !username ||
             !password ||
             !confirmPassword
@@ -341,7 +322,7 @@ const register = async (req, res) => {
                 success: false,
 
                 message:
-                    "Semua data registrasi wajib diisi"
+                    "Username dan password wajib diisi"
 
             });
 
@@ -349,221 +330,30 @@ const register = async (req, res) => {
 
 
         // ======================================
-        // VALIDASI FOTO KTP
+        // BERSIHKAN USERNAME
         // ======================================
-
-        if (!ktpFile) {
-
-            return res.status(400).json({
-
-                success: false,
-
-                message:
-                    "Foto KTP wajib diupload"
-
-            });
-
-        }
-
-
-        // ======================================
-        // BERSIHKAN INPUT
-        // ======================================
-
-        const cleanName =
-            String(name).trim();
-
-        const cleanPhone =
-            String(phone).trim();
-
-        const cleanGender =
-            String(gender).trim();
-
-        const cleanOccupation =
-            String(occupation).trim();
-
-        const cleanAddress =
-            String(address).trim();
-
-        const cleanIdentityNumber =
-            String(identityNumber).trim();
-
-        const cleanBoardingPurpose =
-            String(boardingPurpose).trim();
 
         const cleanUsername =
             String(username).trim();
 
 
         // ======================================
-        // VALIDASI NAMA
-        // ======================================
-
-        if (!cleanName) {
-
-            return res.status(400).json({
-
-                success: false,
-
-                message:
-                    "Nama lengkap wajib diisi"
-
-            });
-
-        }
-
-
-        // ======================================
-        // VALIDASI NOMOR HP
-        // ======================================
-
-        if (!cleanPhone) {
-
-            return res.status(400).json({
-
-                success: false,
-
-                message:
-                    "Nomor HP wajib diisi"
-
-            });
-
-        }
-
-
-        if (
-            !/^[0-9+\-\s]{10,20}$/.test(
-                cleanPhone
-            )
-        ) {
-
-            return res.status(400).json({
-
-                success: false,
-
-                message:
-                    "Format nomor HP tidak valid"
-
-            });
-
-        }
-
-
-        // ======================================
-        // VALIDASI GENDER
-        // ======================================
-
-        if (
-            cleanGender !== "laki-laki"
-        ) {
-
-            return res.status(400).json({
-
-                success: false,
-
-                message:
-                    "Pendaftaran ADELINA KOST hanya untuk laki-laki"
-
-            });
-
-        }
-
-
-        // ======================================
-        // VALIDASI PEKERJAAN
-        // ======================================
-
-        if (!cleanOccupation) {
-
-            return res.status(400).json({
-
-                success: false,
-
-                message:
-                    "Pekerjaan wajib diisi"
-
-            });
-
-        }
-
-
-        if (
-            cleanOccupation.length > 100
-        ) {
-
-            return res.status(400).json({
-
-                success: false,
-
-                message:
-                    "Pekerjaan maksimal 100 karakter"
-
-            });
-
-        }
-
-
-        // ======================================
-        // VALIDASI ALAMAT
-        // ======================================
-
-        if (!cleanAddress) {
-
-            return res.status(400).json({
-
-                success: false,
-
-                message:
-                    "Alamat wajib diisi"
-
-            });
-
-        }
-
-
-        // ======================================
-        // VALIDASI NOMOR KTP
-        // ======================================
-
-        if (
-            !/^[0-9]{16}$/.test(
-                cleanIdentityNumber
-            )
-        ) {
-
-            return res.status(400).json({
-
-                success: false,
-
-                message:
-                    "Nomor KTP harus terdiri dari 16 digit"
-
-            });
-
-        }
-
-
-        // ======================================
-        // VALIDASI TUJUAN NGEKOS
-        // ======================================
-
-        if (!cleanBoardingPurpose) {
-
-            return res.status(400).json({
-
-                success: false,
-
-                message:
-                    "Tujuan atau alasan ngekos wajib diisi"
-
-            });
-
-        }
-
-
-        // ======================================
         // VALIDASI USERNAME
         // ======================================
+
+        if (!cleanUsername) {
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    "Username wajib diisi"
+
+            });
+
+        }
+
 
         if (
             cleanUsername.length < 4
@@ -591,6 +381,37 @@ const register = async (req, res) => {
 
                 message:
                     "Username maksimal 50 karakter"
+
+            });
+
+        }
+
+
+        // ======================================
+        // VALIDASI USERNAME
+        // ======================================
+        //
+        // Hanya boleh menggunakan:
+        //
+        // huruf
+        // angka
+        // underscore
+        // titik
+        //
+        // ======================================
+
+        if (
+            !/^[a-zA-Z0-9_.]+$/.test(
+                cleanUsername
+            )
+        ) {
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    "Username hanya boleh menggunakan huruf, angka, underscore, atau titik"
 
             });
 
@@ -645,6 +466,7 @@ const register = async (req, res) => {
             await db.query(`
 
                 SELECT
+
                     id
 
                 FROM users
@@ -670,45 +492,6 @@ const register = async (req, res) => {
 
                 message:
                     "Username sudah digunakan"
-
-            });
-
-        }
-
-
-        // ======================================
-        // CEK NOMOR KTP
-        // ======================================
-
-        const [existingTenants] =
-            await db.query(`
-
-                SELECT
-                    id
-
-                FROM tenants
-
-                WHERE identity_number = ?
-
-                LIMIT 1
-
-            `, [
-
-                cleanIdentityNumber
-
-            ]);
-
-
-        if (
-            existingTenants.length > 0
-        ) {
-
-            return res.status(409).json({
-
-                success: false,
-
-                message:
-                    "Nomor KTP sudah terdaftar"
 
             });
 
@@ -745,65 +528,23 @@ const register = async (req, res) => {
 
 
         // ======================================
-        // SIMPAN TENANT
-        // ======================================
-        //
-        // STATUS AWAL = CALON
-        //
-        // ======================================
-
-        const [tenantResult] =
-            await connection.query(`
-
-                INSERT INTO tenants
-                (
-                    name,
-                    phone,
-                    address,
-                    identity_number,
-                    gender,
-                    boarding_purpose,
-                    occupation,
-                    status
-                )
-
-                VALUES
-                (
-                    ?,
-                    ?,
-                    ?,
-                    ?,
-                    ?,
-                    ?,
-                    ?,
-                    'calon'
-                )
-
-            `, [
-
-                cleanName,
-
-                cleanPhone,
-
-                cleanAddress,
-
-                cleanIdentityNumber,
-
-                cleanGender,
-
-                cleanBoardingPurpose,
-
-                cleanOccupation
-
-            ]);
-
-
-        const tenantId =
-            tenantResult.insertId;
-
-
-        // ======================================
         // SIMPAN USER
+        // ======================================
+        //
+        // PENTING:
+        //
+        // tenant_id = NULL
+        //
+        // Karena biodata belum diisi.
+        //
+        // name sementara menggunakan username
+        // agar aman apabila kolom users.name
+        // memiliki NOT NULL.
+        //
+        // Nanti setelah biodata lengkap,
+        // users.name akan diperbarui
+        // menjadi nama asli penghuni.
+        //
         // ======================================
 
         const [userResult] =
@@ -824,62 +565,18 @@ const register = async (req, res) => {
                     ?,
                     ?,
                     'penghuni',
-                    ?
+                    NULL
                 )
 
             `, [
 
-                cleanName,
+                cleanUsername,
 
                 cleanUsername,
 
-                hashedPassword,
-
-                tenantId
+                hashedPassword
 
             ]);
-
-
-        // ======================================
-        // SIMPAN DOKUMEN KTP
-        // ======================================
-
-        const filePath =
-            path
-                .join(
-                    "uploads",
-                    "ktp",
-                    ktpFile.filename
-                )
-                .replace(
-                    /\\/g,
-                    "/"
-                );
-
-
-        await connection.query(`
-
-            INSERT INTO tenant_documents
-            (
-                tenant_id,
-                document_type,
-                file_path
-            )
-
-            VALUES
-            (
-                ?,
-                'ktp',
-                ?
-            )
-
-        `, [
-
-            tenantId,
-
-            filePath
-
-        ]);
 
 
         // ======================================
@@ -898,7 +595,7 @@ const register = async (req, res) => {
             success: true,
 
             message:
-                "Akun berhasil dibuat. Anda terdaftar sebagai calon penghuni.",
+                "Akun berhasil dibuat. Silakan login untuk melengkapi biodata.",
 
             data: {
 
@@ -908,7 +605,7 @@ const register = async (req, res) => {
                         userResult.insertId,
 
                     name:
-                        cleanName,
+                        cleanUsername,
 
                     username:
                         cleanUsername,
@@ -917,51 +614,10 @@ const register = async (req, res) => {
                         "penghuni",
 
                     tenant_id:
-                        tenantId,
+                        null,
 
                     tenant_status:
-                        "calon"
-
-                },
-
-                tenant: {
-
-                    id:
-                        tenantId,
-
-                    name:
-                        cleanName,
-
-                    phone:
-                        cleanPhone,
-
-                    address:
-                        cleanAddress,
-
-                    identity_number:
-                        cleanIdentityNumber,
-
-                    gender:
-                        cleanGender,
-
-                    occupation:
-                        cleanOccupation,
-
-                    boarding_purpose:
-                        cleanBoardingPurpose,
-
-                    status:
-                        "calon"
-
-                },
-
-                document: {
-
-                    document_type:
-                        "ktp",
-
-                    file_path:
-                        filePath
+                        null
 
                 }
 
@@ -1005,41 +661,6 @@ const register = async (req, res) => {
 
 
         // ======================================
-        // HAPUS FILE KTP
-        // ======================================
-
-        if (
-            req.file &&
-            req.file.path
-        ) {
-
-            try {
-
-                if (
-                    fs.existsSync(
-                        req.file.path
-                    )
-                ) {
-
-                    fs.unlinkSync(
-                        req.file.path
-                    );
-
-                }
-
-            } catch (fileError) {
-
-                console.error(
-                    "Delete Uploaded File Error:",
-                    fileError
-                );
-
-            }
-
-        }
-
-
-        // ======================================
         // DUPLICATE DATA
         // ======================================
 
@@ -1052,7 +673,7 @@ const register = async (req, res) => {
                 success: false,
 
                 message:
-                    "Data sudah terdaftar"
+                    "Username sudah digunakan"
 
             });
 

@@ -9,8 +9,18 @@ const {
     getCalonTenantById,
     createTenant,
     updateTenant,
-    deleteTenant
+    deleteTenant,
+    deleteTenantProfilePhoto,
+    completeBiodata
 } = require("../controllers/tenantController");
+
+const {
+    uploadProfile,
+    uploadKtp
+} = require("../middleware/uploadMiddleware");
+
+const authenticateToken =
+    require("../middleware/authMiddleware");
 
 const router = express.Router();
 
@@ -18,8 +28,6 @@ const router = express.Router();
 // ============================================================
 // GET ACTIVE TENANTS
 // GET /api/tenants
-//
-// Menampilkan penghuni yang memiliki kontrak ACTIVE.
 // ============================================================
 
 router.get(
@@ -31,14 +39,6 @@ router.get(
 // ============================================================
 // GET ALL TENANTS
 // GET /api/tenants/all
-//
-// Menampilkan seluruh penghuni:
-// - aktif
-// - belum memiliki kontrak
-// - kontrak selesai
-// - kontrak dibatalkan
-//
-// HARUS sebelum /:id
 // ============================================================
 
 router.get(
@@ -50,11 +50,6 @@ router.get(
 // ============================================================
 // GET TENANT HISTORY
 // GET /api/tenants/history
-//
-// Menampilkan penghuni yang sudah tidak memiliki
-// kontrak active.
-//
-// HARUS sebelum /:id
 // ============================================================
 
 router.get(
@@ -66,10 +61,6 @@ router.get(
 // ============================================================
 // GET CALON TENANTS
 // GET /api/tenants/calon
-//
-// Menampilkan calon penghuni.
-//
-// HARUS sebelum /:id
 // ============================================================
 
 router.get(
@@ -81,21 +72,28 @@ router.get(
 // ============================================================
 // GET DETAIL CALON TENANT
 // GET /api/tenants/calon/:id
-//
-// Menampilkan detail calon penghuni:
-// - data diri
-// - username
-// - KTP
-// - booking
-// - pembayaran booking
-// - pembayaran full
-//
-// HARUS sebelum /:id
 // ============================================================
 
 router.get(
     "/calon/:id",
     getCalonTenantById
+);
+
+
+// ============================================================
+// COMPLETE BIODATA
+// POST /api/tenants/complete-biodata
+//
+// Membutuhkan:
+// - JWT
+// - foto KTP
+// ============================================================
+
+router.post(
+    "/complete-biodata",
+    authenticateToken,
+    uploadKtp.single("ktp"),
+    completeBiodata
 );
 
 
@@ -128,7 +126,19 @@ router.post(
 
 router.put(
     "/:id",
+    uploadProfile.single("profile_photo"),
     updateTenant
+);
+
+
+// ============================================================
+// DELETE TENANT PROFILE PHOTO
+// DELETE /api/tenants/:id/profile-photo
+// ============================================================
+
+router.delete(
+    "/:id/profile-photo",
+    deleteTenantProfilePhoto
 );
 
 

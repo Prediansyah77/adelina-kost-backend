@@ -66,6 +66,12 @@ const reportRoutes =
 const tenantDocumentRoutes =
     require("./routes/tenantDocumentRoutes");
 
+const roomInventoryRoutes =
+    require("./routes/roomInventoryRoutes");
+
+const inventoryInspectionRoutes =
+    require("./routes/inventoryInspectionRoutes");
+
 
 
 // ======================================================
@@ -494,6 +500,17 @@ app.use(
 app.use(
     "/api/tenant-accounts",
     tenantAccountRoutes
+);
+
+//investaris
+app.use(
+    "/api/room-inventories",
+    roomInventoryRoutes
+);
+
+app.use(
+    "/api/inventory-inspections",
+    inventoryInspectionRoutes
 );
 
 

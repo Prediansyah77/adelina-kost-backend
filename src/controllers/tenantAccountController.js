@@ -616,11 +616,6 @@ const getMyTenantAccount = async (req, res) => {
         // Akun tetap bisa login sebagai:
         //
         // CALON PENGHUNI
-        //
-        // Frontend akan menerima:
-        //
-        // tenant   = null
-        // contract = null
         // ====================================================
         // ====================================================
 
@@ -647,6 +642,9 @@ const getMyTenantAccount = async (req, res) => {
 
                         username:
                             req.user.username || "",
+
+                        email:
+                            req.user.email || "",
 
                         role:
                             req.user.role
@@ -697,6 +695,7 @@ const getMyTenantAccount = async (req, res) => {
         // ====================================================
         // AMBIL DATA TENANT
         // + USER
+        // + EMAIL USER
         // + STATUS TENANT
         // + KONTRAK AKTIF
         // + KAMAR
@@ -721,6 +720,8 @@ const getMyTenantAccount = async (req, res) => {
 
                     t.identity_number,
 
+                    t.profile_photo,
+
                     t.status AS tenant_status,
 
                     t.created_at AS tenant_created_at,
@@ -733,6 +734,8 @@ const getMyTenantAccount = async (req, res) => {
                     u.id AS user_id,
 
                     u.username,
+
+                    u.email,
 
                     u.role,
 
@@ -865,6 +868,9 @@ const getMyTenantAccount = async (req, res) => {
                     username:
                         tenant.username,
 
+                    email:
+                        tenant.email,
+
                     role:
                         tenant.role
 
@@ -891,6 +897,9 @@ const getMyTenantAccount = async (req, res) => {
 
                     identity_number:
                         tenant.identity_number,
+
+                    profile_photo:
+                        tenant.profile_photo,
 
                     status:
                         tenant.tenant_status,

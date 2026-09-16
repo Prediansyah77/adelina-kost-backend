@@ -494,38 +494,49 @@ const getActiveContracts = async () => {
                 c.id,
                 c.tenant_id,
                 c.room_id,
- 
+
                 DATE_FORMAT(
                     c.start_date,
                     '%Y-%m-%d'
                 ) AS start_date,
- 
+
                 DATE_FORMAT(
                     c.end_date,
                     '%Y-%m-%d'
                 ) AS end_date,
- 
+
                 c.monthly_price,
                 c.status AS contract_status,
- 
+
                 t.name AS tenant_name,
                 t.phone AS tenant_phone,
- 
-                r.room_number
- 
+
+                r.room_number,
+
+                f.id AS floor_id,
+                f.floor_number,
+
+                bu.id AS building_id,
+                bu.name AS building_name
+
             FROM contracts AS c
- 
+
             INNER JOIN tenants AS t
                 ON c.tenant_id = t.id
- 
+
             INNER JOIN rooms AS r
                 ON c.room_id = r.id
- 
+
+            LEFT JOIN floors AS f
+                ON r.floor_id = f.id
+
+            LEFT JOIN buildings AS bu
+                ON f.building_id = bu.id
+
             WHERE c.status = 'active'
- 
+
             ORDER BY c.id ASC
         `);
-
 
     return contracts;
 
@@ -1143,75 +1154,97 @@ const getBills = async (
         //
         // PAID TETAP ADA DI DATABASE
         // TAPI TIDAK DITAMPILKAN DI HALAMAN AKTIF
+        //
+        // BANGUNAN DIAMBIL LANGSUNG DARI:
+        // rooms.building_id
+        //
+        // JANGAN melalui floors karena beberapa
+        // kamar Adelina Kost 1 tidak memiliki floor_id.
         // =============================================
 
         const [rows] =
             await db.query(`
                 SELECT
+
                     b.id,
                     b.contract_id,
- 
+
                     c.tenant_id,
                     c.room_id,
- 
+
                     t.name AS tenant_name,
                     t.phone AS tenant_phone,
- 
+
                     r.room_number,
- 
+
+                    f.id AS floor_id,
+                    f.floor_number,
+
+                    bu.id AS building_id,
+                    bu.name AS building_name,
+
                     b.billing_month,
                     b.billing_year,
                     b.amount,
- 
+
                     DATE_FORMAT(
                         b.due_date,
                         '%Y-%m-%d'
                     ) AS due_date,
- 
+
                     b.status AS bill_status,
- 
+
                     b.created_at,
- 
+
                     c.status AS contract_status,
- 
+
                     DATE_FORMAT(
                         c.start_date,
                         '%Y-%m-%d'
                     ) AS contract_start_date,
- 
+
                     DATE_FORMAT(
                         c.end_date,
                         '%Y-%m-%d'
                     ) AS contract_end_date
- 
+
                 FROM bills AS b
- 
+
                 INNER JOIN contracts AS c
                     ON b.contract_id = c.id
- 
+
                 INNER JOIN tenants AS t
                     ON c.tenant_id = t.id
- 
+
                 INNER JOIN rooms AS r
                     ON c.room_id = r.id
- 
+
+                LEFT JOIN floors AS f
+                    ON r.floor_id = f.id
+
+                LEFT JOIN buildings AS bu
+                    ON r.building_id = bu.id
+
                 WHERE c.status = 'active'
- 
+
                 AND b.status IN (
                     'unpaid',
                     'late'
                 )
- 
+
                 AND b.billing_month = ?
- 
+
                 AND b.billing_year = ?
- 
+
                 ORDER BY
                     b.due_date ASC,
                     b.id ASC
+
             `, [
+
                 billingMonth,
                 billingYear
+
             ]);
 
 

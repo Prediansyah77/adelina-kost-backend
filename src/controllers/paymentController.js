@@ -1845,168 +1845,170 @@ const updatePayment = async (
 // KHUSUS PENGHUNI
 // ======================================================
 
-const getMyPayments = async (
-    req,
-    res
-) => {
-
+const getMyPayments = async (req, res) => {
     try {
-
-        // ==================================================
-        // CEK USER
-        // ==================================================
-
         if (!req.user) {
-
             return res.status(401).json({
-
                 success: false,
-
-                message:
-                    "User belum terautentikasi"
-
+                message: "User belum terautentikasi"
             });
-
         }
 
+        const tenantId = Number(req.user.tenant_id);
 
-        // ==================================================
-        // AMBIL TENANT ID DARI JWT
-        // ==================================================
-
-        const tenantId =
-            Number(
-                req.user.tenant_id
-            );
-
-
-        if (
-            !Number.isInteger(tenantId) ||
-            tenantId <= 0
-        ) {
-
+        if (!Number.isInteger(tenantId) || tenantId <= 0) {
             return res.status(403).json({
-
                 success: false,
-
-                message:
-                    "tenant_id tidak valid"
-
+                message: "tenant_id tidak valid"
             });
-
         }
 
-
-        // ==================================================
-        // AMBIL PEMBAYARAN TAGIHAN
-        //
-        // payments
-        //    ↓
-        // bills
-        //    ↓
-        // contracts
-        //    ↓
-        // tenants
-        //
-        // Hanya pembayaran milik tenant login.
-        // ==================================================
-
-        const [rows] =
-            await db.query(`
-
+        const [rows] = await db.query(
+            `
                 SELECT
-
                     p.id,
-
                     p.bill_id,
-
                     p.booking_id,
-
                     p.payment_date,
-
                     p.amount,
-
                     p.payment_method,
-
                     p.bank_account_id,
-
                     p.status,
-
                     p.notes,
-
                     p.proof_file,
 
+                    /* ==========================
+                       DATA TAGIHAN
+                       ========================== */
                     b.billing_month,
-
                     b.billing_year,
-
                     b.due_date,
-
                     b.status AS bill_status,
 
-                    c.tenant_id,
+                    /* ==========================
+                       DATA KONTRAK
+                       ========================== */
+                    c.tenant_id AS contract_tenant_id,
+                    c.room_id AS contract_room_id,
 
-                    c.room_id,
+                    /* ==========================
+                       DATA KAMAR KONTRAK
+                       ========================== */
+                    r.room_number AS contract_room_number,
 
-                    r.room_number
+                    /* ==========================
+                       DATA BOOKING
+                       ========================== */
+                    rb.tenant_id AS booking_tenant_id,
+                    rb.room_id AS booking_room_id,
+
+                    /* ==========================
+                       DATA KAMAR BOOKING
+                       ========================== */
+                    br.room_number AS booking_room_number
 
                 FROM payments p
 
+                /* PAYMENT → BILL */
                 LEFT JOIN bills b
                     ON p.bill_id = b.id
 
+                /* BILL → CONTRACT */
                 LEFT JOIN contracts c
                     ON b.contract_id = c.id
 
+                /* CONTRACT → ROOM */
                 LEFT JOIN rooms r
                     ON c.room_id = r.id
 
-                WHERE c.tenant_id = ?
+                /* PAYMENT → ROOM BOOKING */
+                LEFT JOIN room_bookings rb
+                    ON p.booking_id = rb.id
 
+                /* ROOM BOOKING → ROOM */
+                LEFT JOIN rooms br
+                    ON rb.room_id = br.id
+
+                /* ==========================
+                   FILTER PEMILIK PEMBAYARAN
+                   ========================== */
+                WHERE
+                    c.tenant_id = ?
+                    OR rb.tenant_id = ?
+
+                /* PEMBAYARAN TERBARU DULU */
                 ORDER BY
                     p.payment_date DESC,
                     p.id DESC
+            `,
+            [tenantId, tenantId]
+        );
 
-            `, [
-                tenantId
-            ]);
+        const formattedRows = rows.map((payment) => {
 
+            const isBookingPayment =
+                !payment.bill_id && payment.booking_id;
 
-        // ==================================================
-        // RESPONSE
-        // ==================================================
+            return {
+                id: payment.id,
 
-        return res.status(200).json({
+                bill_id: payment.bill_id,
+                booking_id: payment.booking_id,
 
-            success: true,
+                payment_date: payment.payment_date,
+                amount: payment.amount,
+                payment_method: payment.payment_method,
+                bank_account_id: payment.bank_account_id,
+                status: payment.status,
+                notes: payment.notes,
+                proof_file: payment.proof_file,
 
-            data: rows
+                /* DATA TAGIHAN */
+                billing_month: payment.billing_month ?? null,
+                billing_year: payment.billing_year ?? null,
+                due_date: payment.due_date ?? null,
+                bill_status: payment.bill_status ?? null,
 
+                /* DATA TENANT */
+                tenant_id:
+                    payment.contract_tenant_id ??
+                    payment.booking_tenant_id ??
+                    null,
+
+                /* DATA KAMAR */
+                room_id:
+                    payment.contract_room_id ??
+                    payment.booking_room_id ??
+                    null,
+
+                room_number:
+                    payment.contract_room_number ??
+                    payment.booking_room_number ??
+                    null,
+
+                /* SUMBER PEMBAYARAN */
+                payment_source:
+                    isBookingPayment
+                        ? "booking"
+                        : "bill"
+            };
         });
 
+        return res.status(200).json({
+            success: true,
+            data: formattedRows
+        });
 
     } catch (error) {
 
-        console.error(
-            "Get My Payments Error:",
-            error
-        );
-
+        console.error("Get My Payments Error:", error);
 
         return res.status(500).json({
-
             success: false,
-
-            message:
-                "Gagal mengambil pembayaran penghuni",
-
-            error:
-                error.message
-
+            message: "Gagal mengambil pembayaran penghuni",
+            error: error.message
         });
-
     }
-
 };
 
 const getPaymentSummary = async (
@@ -2482,9 +2484,7 @@ const createTenantPayment = async (
     console.log("==========================================");
 
     let connection = null;
-
     let uploadedFile = null;
-
 
     try {
 
@@ -2495,12 +2495,8 @@ const createTenantPayment = async (
         if (!req.user) {
 
             return res.status(401).json({
-
                 success: false,
-
-                message:
-                    "User belum terautentikasi"
-
+                message: "User belum terautentikasi"
             });
 
         }
@@ -2520,12 +2516,9 @@ const createTenantPayment = async (
         ) {
 
             return res.status(403).json({
-
                 success: false,
-
                 message:
                     "Akun penghuni tidak memiliki tenant_id yang valid"
-
             });
 
         }
@@ -2550,19 +2543,12 @@ const createTenantPayment = async (
         // ==================================================
 
         const {
-
             bill_id,
-
             payment_date,
-
             amount,
-
             payment_method,
-
             bank_account_id,
-
             notes
-
         } = req.body;
 
 
@@ -2587,12 +2573,9 @@ const createTenantPayment = async (
         ) {
 
             return res.status(400).json({
-
                 success: false,
-
                 message:
                     "bill_id, payment_date, dan amount wajib diisi"
-
             });
 
         }
@@ -2612,12 +2595,9 @@ const createTenantPayment = async (
         ) {
 
             return res.status(400).json({
-
                 success: false,
-
                 message:
                     "bill_id tidak valid"
-
             });
 
         }
@@ -2637,12 +2617,9 @@ const createTenantPayment = async (
         ) {
 
             return res.status(400).json({
-
                 success: false,
-
                 message:
                     "Jumlah pembayaran harus lebih besar dari 0"
-
             });
 
         }
@@ -2661,12 +2638,9 @@ const createTenantPayment = async (
         ) {
 
             return res.status(400).json({
-
                 success: false,
-
                 message:
                     "Metode pembayaran tidak valid"
-
             });
 
         }
@@ -2682,12 +2656,9 @@ const createTenantPayment = async (
         ) {
 
             return res.status(400).json({
-
                 success: false,
-
                 message:
                     "Bukti pembayaran wajib diupload untuk pembayaran transfer"
-
             });
 
         }
@@ -2703,12 +2674,9 @@ const createTenantPayment = async (
         ) {
 
             return res.status(400).json({
-
                 success: false,
-
                 message:
                     "Rekening bank wajib dipilih untuk pembayaran transfer"
-
             });
 
         }
@@ -2737,12 +2705,9 @@ const createTenantPayment = async (
             ) {
 
                 return res.status(400).json({
-
                     success: false,
-
                     message:
                         "Rekening bank tidak valid"
-
                 });
 
             }
@@ -2805,7 +2770,6 @@ const createTenantPayment = async (
             `, [
 
                 billId,
-
                 tenantId
 
             ]);
@@ -2821,14 +2785,10 @@ const createTenantPayment = async (
 
             await connection.rollback();
 
-
             return res.status(404).json({
-
                 success: false,
-
                 message:
                     "Tagihan tidak ditemukan atau bukan milik Anda"
-
             });
 
         }
@@ -2848,14 +2808,10 @@ const createTenantPayment = async (
 
             await connection.rollback();
 
-
             return res.status(400).json({
-
                 success: false,
-
                 message:
                     "Kontrak Anda sudah tidak aktif"
-
             });
 
         }
@@ -2871,14 +2827,10 @@ const createTenantPayment = async (
 
             await connection.rollback();
 
-
             return res.status(400).json({
-
                 success: false,
-
                 message:
                     "Tagihan ini sudah lunas"
-
             });
 
         }
@@ -2921,9 +2873,7 @@ const createTenantPayment = async (
 
             await connection.rollback();
 
-
             return res.status(409).json({
-
                 success: false,
 
                 message:
@@ -2957,28 +2907,52 @@ const createTenantPayment = async (
 
         // ==================================================
         // HITUNG TOTAL PEMBAYARAN YANG SUDAH VERIFIED
+        //
+        // KHUSUS BILL PAYMENT
+        //
+        // Tidak menggunakan booking_id.
         // ==================================================
 
-        const [bookingPaidRows] =
+        const [verifiedPaymentRows] =
             await connection.query(`
-        SELECT
-            COALESCE(SUM(amount), 0) AS total_paid
-        FROM payments
-        WHERE booking_id = ?
-        AND status = 'verified'
-        AND id <> ?
-    `, [
-                payment.booking_id,
-                paymentId
+                SELECT
+                    COALESCE(
+                        SUM(amount),
+                        0
+                    ) AS total_verified_paid
+
+                FROM payments
+
+                WHERE bill_id = ?
+
+                AND status = 'verified'
+            `, [
+
+                billId
+
             ]);
+
+
+        const totalVerifiedPaid =
+            Number(
+                verifiedPaymentRows[0]
+                    ?.total_verified_paid || 0
+            );
+
 
         // ==================================================
         // HITUNG SISA TAGIHAN
         // ==================================================
 
-        const totalBookingPaid =
-            totalVerifiedPaid +
-            paymentAmount;
+        const billAmount =
+            Number(
+                bill.amount
+            );
+
+
+        const remainingAmount =
+            billAmount -
+            totalVerifiedPaid;
 
 
         // ==================================================
@@ -2991,14 +2965,10 @@ const createTenantPayment = async (
 
             await connection.rollback();
 
-
             return res.status(400).json({
-
                 success: false,
-
                 message:
                     "Tagihan ini sudah memiliki pembayaran yang mencukupi"
-
             });
 
         }
@@ -3015,14 +2985,11 @@ const createTenantPayment = async (
 
             await connection.rollback();
 
-
             return res.status(400).json({
-
                 success: false,
 
                 message:
                     `Pembayaran melebihi sisa tagihan. Sisa tagihan: ${remainingAmount}`
-
             });
 
         }
@@ -3059,14 +3026,10 @@ const createTenantPayment = async (
 
                 await connection.rollback();
 
-
                 return res.status(404).json({
-
                     success: false,
-
                     message:
                         "Rekening bank tidak ditemukan"
-
                 });
 
             }
@@ -3084,14 +3047,10 @@ const createTenantPayment = async (
 
                 await connection.rollback();
 
-
                 return res.status(400).json({
-
                     success: false,
-
                     message:
                         "Rekening bank tersebut tidak aktif"
-
                 });
 
             }
@@ -3962,24 +3921,18 @@ const createBookingPayment = async (
 
         const [bankRows] =
             await connection.query(`
-                SELECT
-
-                    id,
-                    bank_name,
-                    account_number,
-                    account_name,
-                    is_active
-
-                FROM bank_accounts
-
-                WHERE bank_name = 'BCA'
-
-                AND account_number = '2200940604'
-
-                LIMIT 1
-
-                FOR UPDATE
-            `);
+        SELECT
+            id,
+            bank_name,
+            account_number,
+            account_name,
+            is_active
+        FROM bank_accounts
+        WHERE is_active = 1
+        ORDER BY id ASC
+        LIMIT 1
+        FOR UPDATE
+    `);
 
 
         if (
@@ -3993,7 +3946,7 @@ const createBookingPayment = async (
                 success: false,
 
                 message:
-                    "Rekening pembayaran BCA ADELINA KOST belum terdaftar di sistem"
+                    "Rekening pembayaran ADELINA KOST belum terdaftar atau tidak ada yang aktif"
 
             });
 
@@ -4005,7 +3958,7 @@ const createBookingPayment = async (
 
 
         // ==================================================
-        // CEK REKENING AKTIF
+        // REKENING SUDAH DIPASTIKAN AKTIF
         // ==================================================
 
         if (
@@ -4021,47 +3974,11 @@ const createBookingPayment = async (
                 success: false,
 
                 message:
-                    "Rekening pembayaran BCA sedang tidak aktif"
+                    `Rekening pembayaran ${bankAccount.bank_name} sedang tidak aktif`
 
             });
 
         }
-
-
-        // ==================================================
-        // UPDATE BOOKING
-        //
-        // Simpan:
-        //
-        // booking_days
-        // booking_amount
-        // booking_expired_at
-        // ==================================================
-
-        await connection.query(`
-            UPDATE room_bookings
-
-            SET
-
-                booking_days = ?,
-
-                booking_amount = ?,
-
-                booking_expired_at = ?
-
-            WHERE id = ?
-
-        `, [
-
-            bookingDays,
-
-            bookingAmount,
-
-            bookingExpiredAt,
-
-            bookingId
-
-        ]);
 
 
         // ==================================================
@@ -4324,9 +4241,13 @@ const createBookingPayment = async (
 };
 
 const createRemainingBookingPayment = async (
+
     req,
     res
 ) => {
+    console.log(
+        "🔥🔥🔥 CREATE REMAINING BOOKING PAYMENT TERPANGGIL 🔥🔥🔥"
+    );
 
     let connection = null;
 
@@ -4796,27 +4717,24 @@ const createRemainingBookingPayment = async (
         // CARI REKENING BCA ADELINA KOST
         // ==================================================
 
+        // ==================================================
+        // AMBIL REKENING PEMBAYARAN AKTIF
+        // ==================================================
+
         const [bankRows] =
             await connection.query(`
-                SELECT
-
-                    id,
-                    bank_name,
-                    account_number,
-                    account_name,
-                    is_active
-
-                FROM bank_accounts
-
-                WHERE bank_name = 'BCA'
-
-                AND account_number = '2200940604'
-
-                LIMIT 1
-
-                FOR UPDATE
-
-            `);
+        SELECT
+            id,
+            bank_name,
+            account_number,
+            account_name,
+            is_active
+        FROM bank_accounts
+        WHERE is_active = 1
+        ORDER BY id ASC
+        LIMIT 1
+        FOR UPDATE
+    `);
 
 
         if (
@@ -4830,7 +4748,7 @@ const createRemainingBookingPayment = async (
                 success: false,
 
                 message:
-                    "Rekening pembayaran BCA ADELINA KOST belum terdaftar di sistem"
+                    "Rekening pembayaran ADELINA KOST belum terdaftar atau tidak ada yang aktif"
 
             });
 
@@ -4858,7 +4776,7 @@ const createRemainingBookingPayment = async (
                 success: false,
 
                 message:
-                    "Rekening pembayaran BCA sedang tidak aktif"
+                    `Rekening pembayaran ${bankAccount.bank_name} sedang tidak aktif`
 
             });
 
@@ -5615,20 +5533,24 @@ const createInitialBookingPayment = async (
             selectedPaymentMethod === "transfer"
         ) {
 
+            // ==============================================
+            // AMBIL REKENING PEMBAYARAN AKTIF
+            // ==============================================
+
             const [bankRows] =
                 await connection.query(`
-                    SELECT
-                        id,
-                        bank_name,
-                        account_number,
-                        account_name,
-                        is_active
-                    FROM bank_accounts
-                    WHERE bank_name = 'BCA'
-                    AND account_number = '2200940604'
-                    LIMIT 1
-                    FOR UPDATE
-                `);
+        SELECT
+            id,
+            bank_name,
+            account_number,
+            account_name,
+            is_active
+        FROM bank_accounts
+        WHERE is_active = 1
+        ORDER BY id ASC
+        LIMIT 1
+        FOR UPDATE
+    `);
 
 
             if (
@@ -5638,9 +5560,12 @@ const createInitialBookingPayment = async (
                 await connection.rollback();
 
                 return res.status(404).json({
+
                     success: false,
+
                     message:
-                        "Rekening pembayaran BCA ADELINA KOST belum terdaftar di sistem"
+                        "Rekening pembayaran ADELINA KOST belum terdaftar atau tidak ada yang aktif"
+
                 });
 
             }
@@ -5663,9 +5588,12 @@ const createInitialBookingPayment = async (
                 await connection.rollback();
 
                 return res.status(400).json({
+
                     success: false,
+
                     message:
-                        "Rekening pembayaran BCA sedang tidak aktif"
+                        `Rekening pembayaran ${bankAccount.bank_name} sedang tidak aktif`
+
                 });
 
             }
@@ -6489,20 +6417,30 @@ const createFullPayment = async (
         // CARI REKENING PEMBAYARAN
         // ==================================================
 
+        // ==================================================
+        // CARI REKENING PEMBAYARAN
+        // ==================================================
+        //
+        // Sistem mengambil rekening ADELINA KOST
+        // yang sedang aktif dari tabel bank_accounts.
+        //
+        // Tidak hardcode BCA / nomor rekening tertentu.
+        // ==================================================
+
         const [bankRows] =
             await connection.query(`
-                SELECT
-                    id,
-                    bank_name,
-                    account_number,
-                    account_name,
-                    is_active
-                FROM bank_accounts
-                WHERE bank_name = 'BCA'
-                AND account_number = '2200940604'
-                LIMIT 1
-                FOR UPDATE
-            `);
+        SELECT
+            id,
+            bank_name,
+            account_number,
+            account_name,
+            is_active
+        FROM bank_accounts
+        WHERE is_active = 1
+        ORDER BY id ASC
+        LIMIT 1
+        FOR UPDATE
+    `);
 
 
         if (
@@ -6516,7 +6454,7 @@ const createFullPayment = async (
                 success: false,
 
                 message:
-                    "Rekening pembayaran BCA ADELINA KOST belum terdaftar di sistem"
+                    "Rekening pembayaran ADELINA KOST belum terdaftar atau tidak ada yang aktif"
 
             });
 
@@ -6544,7 +6482,7 @@ const createFullPayment = async (
                 success: false,
 
                 message:
-                    "Rekening pembayaran BCA sedang tidak aktif"
+                    `Rekening pembayaran ${bankAccount.bank_name} sedang tidak aktif`
 
             });
 

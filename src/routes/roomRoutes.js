@@ -7,6 +7,7 @@ const {
     updateRoom,
     deleteRoom,
     getPublicRooms,
+    transferRoom,
 } = require("../controllers/roomController");
 
 const router = express.Router();
@@ -37,6 +38,22 @@ router.get(
 router.get(
     "/",
     getRooms
+);
+
+
+// ============================================================
+// TRANSFER ROOM
+// POST /api/rooms/transfer
+//
+// Digunakan untuk proses pindah kamar penghuni.
+//
+// Harus diletakkan sebelum /:id
+// supaya "transfer" tidak dianggap sebagai ID kamar.
+// ============================================================
+
+router.post(
+    "/transfer",
+    transferRoom
 );
 
 

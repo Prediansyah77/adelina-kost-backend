@@ -364,6 +364,11 @@ const getPublicRooms = async (
 
 };
 
+// =====================================================
+// TRANSFER ROOM
+// POST /api/rooms/transfer
+// =====================================================
+
 
 // =====================================================
 // GET ALL ROOMS
@@ -1846,13 +1851,638 @@ const deleteRoom = async (
 
 };
 
+// =====================================================
+// TRANSFER ROOM
+// POST /api/rooms/transfer
+// =====================================================
+
+// =====================================================
+// TRANSFER ROOM
+// POST /api/rooms/transfer
+// =====================================================
+
+const transferRoom = async (
+    req,
+    res
+) => {
+
+    console.log("=== TRANSFER ROOM REQUEST MASUK ===");
+
+    const connection =
+        await db.getConnection();
+
+    let transactionStarted = false;
+    let transactionFinished = false;
+
+    try {
+
+        // =====================================================
+        // MULAI DATABASE TRANSACTION
+        // =====================================================
+
+        await connection.beginTransaction();
+
+        transactionStarted = true;
+
+        console.log(
+            "=== TRANSFER ROOM TRANSACTION START ==="
+        );
+
+
+        const {
+            tenant_id,
+            new_room_id,
+            transfer_date,
+            reason
+        } = req.body;
+
+
+        // =====================================================
+        // CEK PENGHUNI
+        // =====================================================
+
+        const [tenants] =
+            await connection.query(`
+
+                SELECT
+                    id,
+                    name,
+                    status
+
+                FROM tenants
+
+                WHERE id = ?
+
+                LIMIT 1
+
+            `, [
+                tenant_id
+            ]);
+
+
+        if (tenants.length === 0) {
+
+            return res.status(404).json({
+
+                success: false,
+
+                message:
+                    "Penghuni tidak ditemukan"
+
+            });
+
+        }
+
+
+        const tenant =
+            tenants[0];
+
+
+        // =====================================================
+        // CEK KONTRAK AKTIF
+        //
+        // FOR UPDATE digunakan supaya kontrak tidak berubah
+        // oleh proses lain selama transfer berlangsung.
+        // =====================================================
+
+        const [contracts] =
+            await connection.query(`
+
+                SELECT
+                    id,
+                    tenant_id,
+                    room_id,
+                    start_date,
+                    end_date,
+                    monthly_price,
+                    status
+
+                FROM contracts
+
+                WHERE tenant_id = ?
+
+                AND status = 'active'
+
+                LIMIT 1
+
+                FOR UPDATE
+
+            `, [
+                tenant_id
+            ]);
+
+
+        if (contracts.length === 0) {
+
+            return res.status(409).json({
+
+                success: false,
+
+                message:
+                    "Penghuni tidak memiliki kontrak aktif"
+
+            });
+
+        }
+
+
+        const contract =
+            contracts[0];
+
+
+        // =====================================================
+        // VALIDASI KAMAR TUJUAN TIDAK SAMA
+        // =====================================================
+
+        if (
+            Number(contract.room_id) ===
+            Number(new_room_id)
+        ) {
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    "Kamar tujuan sama dengan kamar saat ini"
+
+            });
+
+        }
+
+
+        // =====================================================
+        // CEK KAMAR TUJUAN
+        //
+        // FOR UPDATE mengunci kamar tujuan selama transaction.
+        // Ini mencegah dua proses transfer menggunakan kamar
+        // kosong yang sama secara bersamaan.
+        // =====================================================
+
+        const [newRooms] =
+            await connection.query(`
+
+                SELECT
+                    r.id,
+                    r.room_number,
+                    r.building_id,
+                    r.floor_id,
+                    r.price,
+                    r.status,
+                    f.name AS floor_name,
+                    b.name AS building_name
+
+                FROM rooms r
+
+                LEFT JOIN floors f
+                    ON r.floor_id = f.id
+
+                LEFT JOIN buildings b
+                    ON r.building_id = b.id
+
+                WHERE r.id = ?
+
+                LIMIT 1
+
+                FOR UPDATE
+
+            `, [
+                new_room_id
+            ]);
+
+
+        if (newRooms.length === 0) {
+
+            return res.status(404).json({
+
+                success: false,
+
+                message:
+                    "Kamar tujuan tidak ditemukan"
+
+            });
+
+        }
+
+
+        const newRoom =
+            newRooms[0];
+
+
+        // =====================================================
+        // CEK KAMAR TUJUAN MEMILIKI KONTRAK AKTIF
+        // =====================================================
+
+        const [activeTargetContracts] =
+            await connection.query(`
+
+                SELECT
+                    id,
+                    tenant_id
+
+                FROM contracts
+
+                WHERE room_id = ?
+
+                AND status = 'active'
+
+                LIMIT 1
+
+            `, [
+                new_room_id
+            ]);
+
+
+        if (activeTargetContracts.length > 0) {
+
+            return res.status(409).json({
+
+                success: false,
+
+                message:
+                    "Kamar tujuan sedang ditempati penghuni lain"
+
+            });
+
+        }
+
+
+        // =====================================================
+        // CEK STATUS KAMAR TUJUAN
+        // =====================================================
+
+        const targetRoomStatus =
+            String(
+                newRoom.status || ""
+            ).toLowerCase();
+
+
+        if (
+            targetRoomStatus !== "available"
+        ) {
+
+            return res.status(409).json({
+
+                success: false,
+
+                message:
+                    `Kamar ${newRoom.room_number} tidak tersedia untuk pindah. Status saat ini: ${targetRoomStatus}`
+
+            });
+
+        }
+
+
+        // =====================================================
+        // SIMPAN ID KAMAR LAMA
+        // =====================================================
+
+        const oldRoomId =
+            contract.room_id;
+
+
+        // =====================================================
+        // UPDATE KONTRAK
+        //
+        // HANYA room_id yang berubah.
+        //
+        // tenant_id tetap.
+        // monthly_price tetap.
+        // start_date tetap.
+        // end_date tetap.
+        // status tetap active.
+        // =====================================================
+
+        const [contractUpdate] =
+            await connection.query(`
+
+                UPDATE contracts
+
+                SET room_id = ?
+
+                WHERE id = ?
+
+                AND tenant_id = ?
+
+                AND status = 'active'
+
+            `, [
+                new_room_id,
+                contract.id,
+                tenant_id
+            ]);
+
+
+        if (
+            contractUpdate.affectedRows !== 1
+        ) {
+
+            throw new Error(
+                "Gagal memperbarui kamar pada kontrak"
+            );
+
+        }
+
+
+        // =====================================================
+        // UPDATE KAMAR LAMA
+        //
+        // occupied → available
+        // =====================================================
+
+        const [oldRoomUpdate] =
+            await connection.query(`
+
+                UPDATE rooms
+
+                SET status = 'available'
+
+                WHERE id = ?
+
+            `, [
+                oldRoomId
+            ]);
+
+
+        if (
+            oldRoomUpdate.affectedRows !== 1
+        ) {
+
+            throw new Error(
+                "Gagal mengubah status kamar lama"
+            );
+
+        }
+
+
+        // =====================================================
+        // UPDATE KAMAR BARU
+        //
+        // available → occupied
+        // =====================================================
+
+        const [newRoomUpdate] =
+            await connection.query(`
+
+                UPDATE rooms
+
+                SET status = 'occupied'
+
+                WHERE id = ?
+
+                AND status = 'available'
+
+            `, [
+                new_room_id
+            ]);
+
+
+        if (
+            newRoomUpdate.affectedRows !== 1
+        ) {
+
+            throw new Error(
+                "Gagal mengubah status kamar baru"
+            );
+
+        }
+
+
+        // =====================================================
+        // SIMPAN RIWAYAT TRANSFER
+        // =====================================================
+
+        const [transferHistory] =
+            await connection.query(`
+
+                INSERT INTO room_transfers (
+
+                    tenant_id,
+                    old_room_id,
+                    new_room_id,
+                    transfer_date,
+                    reason
+
+                )
+
+                VALUES (?, ?, ?, ?, ?)
+
+            `, [
+                tenant_id,
+                oldRoomId,
+                new_room_id,
+                transfer_date || null,
+                reason || null
+            ]);
+
+
+        if (
+            transferHistory.affectedRows !== 1
+        ) {
+
+            throw new Error(
+                "Gagal menyimpan riwayat pindah kamar"
+            );
+
+        }
+
+
+        // =====================================================
+        // COMMIT TRANSACTION
+        // =====================================================
+
+        await connection.commit();
+
+        transactionFinished = true;
+
+        console.log(
+            "=== TRANSFER ROOM TRANSACTION COMMIT ==="
+        );
+
+
+        // =====================================================
+        // RESPONSE BERHASIL
+        // =====================================================
+
+        return res.json({
+
+            success: true,
+
+            message:
+                "Pindah kamar berhasil",
+
+            data: {
+
+                tenant: {
+
+                    id:
+                        tenant.id,
+
+                    name:
+                        tenant.name
+
+                },
+
+                contract: {
+
+                    id:
+                        contract.id,
+
+                    old_room_id:
+                        oldRoomId,
+
+                    new_room_id:
+                        Number(new_room_id),
+
+                    monthly_price:
+                        contract.monthly_price
+
+                },
+
+                old_room: {
+
+                    id:
+                        oldRoomId,
+
+                    status:
+                        "available"
+
+                },
+
+                new_room: {
+
+                    id:
+                        newRoom.id,
+
+                    room_number:
+                        newRoom.room_number,
+
+                    building_id:
+                        newRoom.building_id,
+
+                    building_name:
+                        newRoom.building_name,
+
+                    floor_id:
+                        newRoom.floor_id,
+
+                    floor_name:
+                        newRoom.floor_name,
+
+                    status:
+                        "occupied"
+
+                },
+
+                transfer: {
+
+                    transfer_date:
+                        transfer_date || null,
+
+                    reason:
+                        reason || null
+
+                }
+
+            }
+
+        });
+
+
+    } catch (error) {
+
+        console.error(
+            "Transfer Room Error:",
+            error
+        );
+
+
+        // =====================================================
+        // ROLLBACK JIKA TERJADI ERROR
+        // =====================================================
+
+        if (
+            transactionStarted &&
+            !transactionFinished
+        ) {
+
+            try {
+
+                await connection.rollback();
+
+                console.log(
+                    "=== TRANSFER ROOM TRANSACTION ROLLBACK ==="
+                );
+
+            } catch (rollbackError) {
+
+                console.error(
+                    "Rollback Error:",
+                    rollbackError
+                );
+
+            }
+
+        }
+
+
+        return res.status(500).json({
+
+            success: false,
+
+            message:
+                "Gagal memproses pindah kamar",
+
+            error:
+                error.message
+
+        });
+
+    } finally {
+
+        // =====================================================
+        // SAFETY ROLLBACK
+        //
+        // Kalau transaction masih belum selesai,
+        // pastikan tidak ada transaction yang menggantung.
+        // =====================================================
+
+        if (
+            transactionStarted &&
+            !transactionFinished
+        ) {
+
+            try {
+
+                await connection.rollback();
+
+            } catch (rollbackError) {
+
+                console.error(
+                    "Final Rollback Error:",
+                    rollbackError
+                );
+
+            }
+
+        }
+
+
+        // =====================================================
+        // RELEASE CONNECTION
+        // =====================================================
+
+        connection.release();
+
+    }
+
+};
 
 // =====================================================
 // EXPORT
 // =====================================================
 
 module.exports = {
-
     getRooms,
 
     getRoomById,
@@ -1863,6 +2493,8 @@ module.exports = {
 
     deleteRoom,
 
-    getPublicRooms
+    getPublicRooms,
+
+    transferRoom
 
 };
